@@ -1,0 +1,804 @@
+{
+  "schemaVersion": "1.0",
+  "handle": "acorrd_standards-compat",
+  "did": "did:web:etzhayyim.com:actor:acorrd_standards-compat",
+  "kind": "compat",
+  "title": "acorrd_standards clean-room actor",
+  "description": "Clean-room, API-compatible core banking / InsurTech actor (acorrd_standards); runs browser-local on IPFS + kotoba-WASM.",
+  "wasmCid": "bafkreie4ezygsq7fmht5jpjipilsgxhq25o5ezysfl7uqrf5xdwyb3l57e",
+  "wasmProvenance": "built-rust-raw",
+  "runtime": "kotoba-wasm",
+  "exec": "browser-local|donated-mesh",
+  "ipfs": "ipfs://bafkreie4ezygsq7fmht5jpjipilsgxhq25o5ezysfl7uqrf5xdwyb3l57e",
+  "schema": "schema/acorrd_standards.kotoba",
+  "tier": "L4",
+  "verified": null,
+  "entities": [
+    "Account",
+    "Loan",
+    "Policy",
+    "Claim",
+    "Transaction",
+    "Customer"
+  ],
+  "adr": [
+    "260607",
+    "2606014500",
+    "2606013800",
+    "2606036000"
+  ],
+  "capabilities": {
+    "api": {
+      "type": "rest",
+      "runtime": "kotoba-wasm",
+      "endpointCount": 30,
+      "routes": [
+        {
+          "method": "POST",
+          "path": "/v1/accounts",
+          "op": "create Account"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/accounts",
+          "op": "list Account"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/accounts/{id}",
+          "op": "get Account"
+        },
+        {
+          "method": "PATCH",
+          "path": "/v1/accounts/{id}",
+          "op": "update Account"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/accounts/{id}",
+          "op": "delete Account"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/loans",
+          "op": "create Loan"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/loans",
+          "op": "list Loan"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/loans/{id}",
+          "op": "get Loan"
+        },
+        {
+          "method": "PATCH",
+          "path": "/v1/loans/{id}",
+          "op": "update Loan"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/loans/{id}",
+          "op": "delete Loan"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/policies",
+          "op": "create Policy"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/policies",
+          "op": "list Policy"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/policies/{id}",
+          "op": "get Policy"
+        },
+        {
+          "method": "PATCH",
+          "path": "/v1/policies/{id}",
+          "op": "update Policy"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/policies/{id}",
+          "op": "delete Policy"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/claims",
+          "op": "create Claim"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/claims",
+          "op": "list Claim"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/claims/{id}",
+          "op": "get Claim"
+        },
+        {
+          "method": "PATCH",
+          "path": "/v1/claims/{id}",
+          "op": "update Claim"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/claims/{id}",
+          "op": "delete Claim"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/transactions",
+          "op": "create Transaction"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/transactions",
+          "op": "list Transaction"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/transactions/{id}",
+          "op": "get Transaction"
+        },
+        {
+          "method": "PATCH",
+          "path": "/v1/transactions/{id}",
+          "op": "update Transaction"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/transactions/{id}",
+          "op": "delete Transaction"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/customers",
+          "op": "create Customer"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/customers",
+          "op": "list Customer"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/customers/{id}",
+          "op": "get Customer"
+        },
+        {
+          "method": "PATCH",
+          "path": "/v1/customers/{id}",
+          "op": "update Customer"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/customers/{id}",
+          "op": "delete Customer"
+        }
+      ],
+      "features": {
+        "pagination": true,
+        "filtering": true,
+        "relationExpansion": true,
+        "strictValidation": true,
+        "contractTest": true
+      },
+      "health": "/healthz"
+    },
+    "supplychain": {
+      "type": "cyclonedx-sbom",
+      "runtime": "kotoba-wasm",
+      "sbom": "manifest:supplychain.sbom",
+      "sbomData": {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "metadata": {
+          "component": {
+            "type": "application",
+            "name": "acorrd_standards-compat",
+            "purl": "pkg:etzhayyim/acorrd_standards-compat"
+          }
+        },
+        "components": [
+          {
+            "type": "library",
+            "name": "kotoba",
+            "scope": "required",
+            "purl": "pkg:etzhayyim/kotoba"
+          },
+          {
+            "type": "library",
+            "name": "kotodama-wasm",
+            "scope": "required",
+            "purl": "pkg:etzhayyim/kotodama-wasm"
+          },
+          {
+            "type": "library",
+            "name": "datomic-client",
+            "scope": "required",
+            "purl": "pkg:etzhayyim/datomic-client"
+          }
+        ]
+      },
+      "adr": [
+        "2606036000"
+      ]
+    },
+    "socialpost": {
+      "type": "datom-event-feed",
+      "runtime": "kotoba-wasm",
+      "lexicon": "app.bsky.feed.post",
+      "source": "acorrd_standards.* Datom events",
+      "mode": "dry-run",
+      "gate": "G8"
+    },
+    "mcp": {
+      "type": "model-context-protocol",
+      "runtime": "kotoba-wasm",
+      "transport": "ipfs+kotoba-wasm",
+      "toolCount": 30,
+      "tools": [
+        {
+          "name": "create_account",
+          "description": "Create a Account.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "holderId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "balance": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "balance"
+            ]
+          }
+        },
+        {
+          "name": "list_accounts",
+          "description": "List Accounts.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "get_account",
+          "description": "Get a Account by id.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "update_account",
+          "description": "Update a Account.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "holderId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "balance": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "delete_account",
+          "description": "Delete a Account.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "create_loan",
+          "description": "Create a Loan.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "borrowerId": {
+                "type": "string"
+              },
+              "principal": {
+                "type": "number"
+              },
+              "rate": {
+                "type": "number"
+              },
+              "termMonths": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "principal",
+              "rate"
+            ]
+          }
+        },
+        {
+          "name": "list_loans",
+          "description": "List Loans.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "get_loan",
+          "description": "Get a Loan by id.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "update_loan",
+          "description": "Update a Loan.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "borrowerId": {
+                "type": "string"
+              },
+              "principal": {
+                "type": "number"
+              },
+              "rate": {
+                "type": "number"
+              },
+              "termMonths": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "delete_loan",
+          "description": "Delete a Loan.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "create_policy",
+          "description": "Create a Policy.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "holderId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "premium": {
+                "type": "number"
+              },
+              "coverage": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "premium"
+            ]
+          }
+        },
+        {
+          "name": "list_policies",
+          "description": "List Policies.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "get_policy",
+          "description": "Get a Policy by id.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "update_policy",
+          "description": "Update a Policy.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "holderId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "premium": {
+                "type": "number"
+              },
+              "coverage": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "delete_policy",
+          "description": "Delete a Policy.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "create_claim",
+          "description": "Create a Claim.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "policyId": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string"
+              },
+              "filedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "status"
+            ]
+          }
+        },
+        {
+          "name": "list_claims",
+          "description": "List Claims.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "get_claim",
+          "description": "Get a Claim by id.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "update_claim",
+          "description": "Update a Claim.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "policyId": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              },
+              "status": {
+                "type": "string"
+              },
+              "filedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "delete_claim",
+          "description": "Delete a Claim.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "create_transaction",
+          "description": "Create a Transaction.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "accountId": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              },
+              "type": {
+                "type": "string"
+              },
+              "postedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "type"
+            ]
+          }
+        },
+        {
+          "name": "list_transactions",
+          "description": "List Transactions.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "get_transaction",
+          "description": "Get a Transaction by id.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "update_transaction",
+          "description": "Update a Transaction.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "accountId": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              },
+              "type": {
+                "type": "string"
+              },
+              "postedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "delete_transaction",
+          "description": "Delete a Transaction.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "create_customer",
+          "description": "Create a Customer.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "taxId": {
+                "type": "string"
+              },
+              "kycStatus": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kycStatus"
+            ]
+          }
+        },
+        {
+          "name": "list_customers",
+          "description": "List Customers.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "get_customer",
+          "description": "Get a Customer by id.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "update_customer",
+          "description": "Update a Customer.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "taxId": {
+                "type": "string"
+              },
+              "kycStatus": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        },
+        {
+          "name": "delete_customer",
+          "description": "Delete a Customer.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
