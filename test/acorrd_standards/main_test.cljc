@@ -84,6 +84,20 @@
       (is (= 1000.0 (get facts "acorrd_standards.Account/balance")))
       (is (= "acorrdst_acc_x" (get facts "acorrd_standards.Account/id"))))))
 
+(deftest update-coercion
+  ;; CONFIRMED BUG regression: handle-update never ran field values through
+  ;; coerce-field the way handle-create does, so updating a :bool/:int/:float
+  ;; field with a raw string (plausible from a JSON request body) silently
+  ;; stored the wrong type instead of coercing it.
+  (let [s (m/fresh-store)
+        [rec _] (m/handle-create s "Account" {:type "checking" :balance "2500.75"})
+        [updated _] (m/handle-update s "Account" (:id rec) {:balance "3000.25"})]
+    (is (= 3000.25 (:balance updated))))
+  (let [s (m/fresh-store)
+        [loan _] (m/handle-create s "Loan" {:principal "50000" :rate "5.5" :termMonths "60"})
+        [updated _] (m/handle-update s "Loan" (:id loan) {:termMonths "72"})]
+    (is (= 72 (:termMonths updated)))))
+
 (deftest healthz
   (is (= [{:status "ok" :actor "acorrd_standards-compat" :tier "L4" :entities entities} 200] (m/healthz))))
 

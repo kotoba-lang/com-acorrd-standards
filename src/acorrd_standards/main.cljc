@@ -168,11 +168,11 @@
     (if (empty? rows) (not-found) [(expand store (first rows) params refs) 200])))
 
 (defn handle-update [store entity id data]
-  (let [{:keys [fields]} (spec-for entity) rows (query store entity id)]
+  (let [{:keys [fields coerce]} (spec-for entity) rows (query store entity id)]
     (if (empty? rows)
       (not-found)
       (or (some-> (reject-unknown data fields) (vector 400))
-          (let [rec (reduce-kv (fn [m k v] (if (#{:id :createdAt} k) m (assoc m k v)))
+          (let [rec (reduce-kv (fn [m k v] (if (#{:id :createdAt} k) m (assoc m k (coerce-field (get coerce k) v))))
                                (first rows) data)
                 rec (assoc rec :updatedAt (now))]
             (persist! store entity rec)
