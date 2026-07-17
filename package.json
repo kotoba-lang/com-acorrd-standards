@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "nbb --classpath src:test -e \"(require '[clojure.test :as t] 'acorrd-standards.main-test) (let [r (t/run-tests 'acorrd-standards.main-test)] (.exit js/process (if (pos? (+ (:fail r) (:error r))) 1 0)))\""
+  }
+}
