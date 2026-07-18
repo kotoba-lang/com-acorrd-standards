@@ -3,7 +3,16 @@
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
-                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      io.github.kotoba-lang/kotoba
+                      {:git/url "https://github.com/kotoba-lang/kotoba.git"
+                       :git/sha "47a83883ce0ca91d6cda978c8fd03f38192c3887"}
+                      io.github.kotoba-lang/compiler
+                      {:git/url "https://github.com/kotoba-lang/compiler.git"
+                       :git/sha "269846bbd9921517ec9451fbf575e047d61c7e19"}
+                      io.github.kotoba-lang/kotoba-lang
+                      {:git/url "https://github.com/kotoba-lang/kotoba-lang.git"
+                       :git/sha "94443462fba84e28bff5df6e3adf6752bf9b8e2e"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
   ;; clj-kondo as a Clojars lib (no Homebrew/system install needed).

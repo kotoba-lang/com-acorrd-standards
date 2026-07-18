@@ -1,0 +1,1 @@
+{:kotoba.q9.pilot/version 1, :source "src/acorrd_standards/page_limit.kotoba", :oracle {:namespace acorrd-standards.main, :function page-limit, :cases [-1 0 1 20 250], :expected [20 20 1 20 100]}, :effects #{}, :capabilities #{}, :consumer-cutover false, :rollback {:oracle-retained true, :action :remove-unused-pilot-source}}
