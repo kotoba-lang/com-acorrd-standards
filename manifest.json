@@ -10,7 +10,7 @@
   "runtime": "kotoba-wasm",
   "exec": "browser-local|donated-mesh",
   "ipfs": "ipfs://bafkreie4ezygsq7fmht5jpjipilsgxhq25o5ezysfl7uqrf5xdwyb3l57e",
-  "schema": "schema/acorrd_standards.kotoba",
+  "schema": "schema/acorrd_standards.kotoba-schema",
   "tier": "L4",
   "verified": null,
   "entities": [

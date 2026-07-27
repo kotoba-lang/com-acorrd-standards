@@ -81,6 +81,13 @@
 (defn coerce-field [kind v]
   (case kind :int (as-int v) :float (as-float v) :bool (as-bool v) v))
 
+(defn page-limit
+  "Bound a requested page size. Retained CLJC oracle for page_limit.kotoba."
+  [requested]
+  (if (pos? requested)
+    (min requested max-limit)
+    default-limit))
+
 ;; --- in-memory store (materializes the Datom log; live engine binds in prod) ---
 (defn fresh-store [] (atom {}))
 (def ^:dynamic *store* (fresh-store))
@@ -125,7 +132,7 @@
           rows fields))
 
 (defn paginate [rows params]
-  (let [limit (min (max (or (let [l (as-int (get params :limit))] (when (pos? l) l)) default-limit) 1) max-limit)
+  (let [limit (page-limit (as-int (get params :limit)))
         start (get params :starting_after)
         rows (if (some? start)
                (let [ids (mapv :id rows) idx (.indexOf ^java.util.List ids start)]

@@ -1,0 +1,9 @@
+(ns q9.page-limit)
+
+(defn page-limit [requested]
+  (if (> requested 0)
+    (if (> requested 100) 100 requested)
+    20))
+
+(defn main []
+  (page-limit 250))
