@@ -6,9 +6,9 @@
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                       io.github.kotoba-lang/kotoba
                       {:git/url "https://github.com/kotoba-lang/kotoba.git"
-                       :git/sha "47a83883ce0ca91d6cda978c8fd03f38192c3887"}
-                      io.github.kotoba-lang/compiler
-                      {:git/url "https://github.com/kotoba-lang/compiler.git"
+                       :git/sha "5edf55b5c7221ed2be1579c34a78b2e419bcdc6b"}
+                      io.github.kotoba-lang/amu
+                      {:git/url "https://github.com/kotoba-lang/amu.git"
                        :git/sha "269846bbd9921517ec9451fbf575e047d61c7e19"}
                       io.github.kotoba-lang/kotoba-lang
                       {:git/url "https://github.com/kotoba-lang/kotoba-lang.git"
