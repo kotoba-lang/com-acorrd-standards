@@ -1,0 +1,20 @@
+amu check src/acorrd_standards/paginate.kotoba --jvm-free
+{:ok true, :exports [as-int clamp-limit has-more? main test-kernel], :admitted? true, :effects #{}, :unused-grants #{}}
+
+amu compile src/acorrd_standards/paginate.kotoba --target wasm32 --jvm-free
+{:ok true, :target :wasm32-kotoba-v1, :definitions-recompiled 5, :kotoba.compile/inputs :single-file}
+
+kotoba -M check src/acorrd_standards/paginate.kotoba
+{:ok true, :exports [as-int clamp-limit has-more? main test-kernel], :effects #{}, :abac {:allowed? true}}
+
+kotoba -M test src/acorrd_standards/paginate.kotoba
+kotoba test: 3/3 passed tests=[test-kernel] targets=[:jvm-kir :js :wasm]
+
+kotoba -M compile src/acorrd_standards/paginate.kotoba --target wasm32
+{:ok true, :target :wasm32-kotoba-v1, :definitions-recompiled 5, :kotoba.compile/inputs :single-file}
+
+clojure -M:test
+Ran 13 tests containing 70 assertions. 0 failures, 0 errors.
+
+nbb --classpath src:test run-tests.cljs
+nbb: 11 tests, 60 passed, 0 failed, 0 errors
