@@ -1,0 +1,48 @@
+(ns acorrd-standards.paginate
+  (:export [as-int clamp-limit has-more? main test-kernel]))
+
+;; Bounded pure-int slice of acorrd-standards.main/paginate: the pagination
+;; *decision* kernel only. The .cljc `paginate` stays authoritative for cursor
+;; walking over rows (string ids, `starting_after`); what migrates here is the
+;; pure integer decision the handler makes after the rows are cut: coerce the
+;; requested limit, clamp it, and decide whether another page exists.
+;; No strings, no maps, no folds -- the same subset page_limit.kotoba lives in.
+
+(def default-limit 20)
+(def max-limit 100)
+
+;; Positive-int coercion of an untrusted page-size input. The .cljc `as-int`
+;; accepts strings and maps to 0 on failure; that parse half stays on the
+;; oracle (strings are outside the admitted subset). Once a caller has an
+;; integer, this is its value shape: non-positive collapses to the default.
+(defn as-int [v]
+  (if (> v 0) v 0))
+
+;; Clamp a coerced page size into [1, max-limit]; 0 (absent) -> default-limit.
+(defn clamp-limit [requested]
+  (if (> requested 0)
+    (if (> requested max-limit) max-limit requested)
+    default-limit))
+
+;; The `has_more` decision of handle-list: the row supply outgrew the page
+;; when the remaining count strictly exceeds the applied limit.
+(defn has-more? [remaining limit]
+  (if (> remaining limit) 1 0))
+
+(defn main []
+  (has-more? 101 (clamp-limit (as-int 100))))
+
+;; Qualification self-test for `kotoba -M test`: the full decision surface,
+;; checked as a single bool via (and ...).
+(defn test-kernel []
+  (and (= 0 (as-int -5))
+       (= 0 (as-int 0))
+       (= 7 (as-int 7))
+       (= 20 (clamp-limit (as-int -5)))
+       (= 1 (clamp-limit 1))
+       (= 100 (clamp-limit 100))
+       (= 100 (clamp-limit 250))
+       (= 0 (has-more? 20 20))
+       (= 1 (has-more? 21 20))
+       (= 1 (has-more? 250 100))
+       (= 1 (has-more? 101 (clamp-limit (as-int 100))))))

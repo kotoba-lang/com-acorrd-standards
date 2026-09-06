@@ -1,1 +1,22 @@
-{:kotoba.q9.pilot/version 1, :source "src/acorrd_standards/page_limit.kotoba", :oracle {:namespace acorrd-standards.main, :function page-limit, :cases [-1 0 1 20 250], :expected [20 20 1 20 100]}, :effects #{}, :capabilities #{}, :consumer-cutover false, :rollback {:oracle-retained true, :action :remove-unused-pilot-source}}
+{:kotoba.q9.pilot/version 1
+ :sources ["src/acorrd_standards/page_limit.kotoba"
+           "src/acorrd_standards/paginate.kotoba"]
+ :oracles [{:namespace acorrd-standards.main
+            :function page-limit
+            :source "src/acorrd_standards/page_limit.kotoba"
+            :cases [-1 0 1 20 250]
+            :expected [20 20 1 20 100]}
+           {:namespace acorrd-standards.main
+            :functions [as-int-kernel clamp-limit has-more-kernel?]
+            :source "src/acorrd_standards/paginate.kotoba"
+            :main-expression [has-more-kernel? 101 [clamp-limit [as-int-kernel 100]]]
+            :expected true}]
+ :effects #{}
+ :capabilities #{}
+ :consumer-cutover false
+ :host-boundary
+ {:retained-cljc ["src/acorrd_standards/main.cljc"]
+  :owns [:clock :uuid :mutable-crud-state :exceptions :maps :strings :floating-point]}
+ :rollback
+ {:oracle-retained true
+  :action :remove-pilot-source-and-continue-using-cljc-oracle}}
