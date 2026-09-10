@@ -1231,16 +1231,27 @@
     (= sel 6) (str-hash (seeded-store 2))
     :else (arr-count (store-rows (seeded-store 3) "Claim"))))
 
+;; Selector 1 must return every row and selector 2 none, on the same
+;; field; without that pair a green run cannot be told from a filter
+;; whose key this repository does not have.
+;; Selectors 3 and 4 index a non-required field that carries the row
+;; number, so they reach the one-row and the no-row cases.
 (defn oracle-filters [sel :i64] :i64
   (let [rows (store-rows (seeded-store 5) "Account")
         fields (fields-of "Account")]
     (cond
+      ;; no filter at all -- the row count itself
       (= sel 0) (arr-count (apply-filters rows "{}" fields))
-      (= sel 1) (arr-count (apply-filters rows "{\"jurisdiction\":\"IN\"}" fields))
-      (= sel 2) (arr-count (apply-filters rows "{\"jurisdiction\":\"\"}" fields))
-      (= sel 3) (arr-count (apply-filters rows "{\"externalId\":\"3\"}" fields))
-      (= sel 4) (arr-count (apply-filters rows "{\"externalId\":\"99\"}" fields))
+      ;; a required field, the value every seeded row carries
+      (= sel 1) (arr-count (apply-filters rows "{\"type\":\"v\"}" fields))
+      ;; the SAME field, a value no seeded row carries
+      (= sel 2) (arr-count (apply-filters rows "{\"type\":\"zzz\"}" fields))
+      ;; the row index, which is unique -- exactly one row
+      (= sel 3) (arr-count (apply-filters rows "{\"holderId\":\"1\"}" fields))
+      ;; the row index, out of range -- no row
+      (= sel 4) (arr-count (apply-filters rows "{\"holderId\":\"99\"}" fields))
       :else (arr-count (apply-filters rows "{\"notAField\":\"x\"}" fields)))))
+
 
 (defn oracle-paginate [n :i64 requested :i64] :i64
   (let [rows (store-rows (seeded-store n) "Account")
