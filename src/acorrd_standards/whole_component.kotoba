@@ -1264,6 +1264,10 @@
         params (jobj (jkv "starting_after" (string-concat "acorrdst_acc_" (string-from-i64 after))))]
     (arr-count (paginate-cursor rows params))))
 
+;; Selector 6 is the update SUCCESS arm and must be 200; 7 is its 404.
+;; Selector 13 hashes the field selector 6 wrote, so it is meaningful
+;; only while 6 succeeds -- if 6 ever returns 400 again, 13 is hashing
+;; an absent field and will read the same in every repository.
 (defn oracle-handlers [sel :i64] :i64
   (let [store (seeded-store 2)]
     (cond
@@ -1274,7 +1278,7 @@
       (= sel 4) (as-int (field (handle-get store "Account" "acorrdst_acc_0" "{}") "status"))
       (= sel 5) (as-int (field (handle-get store "Account" "nope" "{}") "status"))
       (= sel 6) (as-int (field (handle-update store "Account" "acorrdst_acc_0"
-                                              "{\"jurisdiction\":\"US\"}" 1) "status"))
+                                              "{\"type\":\"updated\"}" 1) "status"))
       (= sel 7) (as-int (field (handle-update store "Account" "nope" "{}" 1) "status"))
       (= sel 8) (as-int (field (handle-delete store "Account" "acorrdst_acc_0") "status"))
       (= sel 9) (as-int (field (handle-delete store "Account" "nope") "status"))
@@ -1287,10 +1291,11 @@
                                         "Account"))
       (= sel 12) (as-int (field (raw-field (handle-list store "Account" "{}") "body") "total"))
       (= sel 13) (str-hash (field (raw-field (handle-update store "Account" "acorrdst_acc_0"
-                                                            "{\"jurisdiction\":\"US\"}" 1)
+                                                            "{\"type\":\"updated\"}" 1)
                                              "body")
-                                  "jurisdiction"))
+                                  "type"))
       :else (str-hash (raw-field (handle-get store "Account" "acorrdst_acc_1" "{}") "body")))))
+
 
 (defn oracle-healthz [] :i64 (str-hash (healthz)))
 
