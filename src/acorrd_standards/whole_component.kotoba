@@ -1,0 +1,1330 @@
+(ns acorrd-standards.whole-component
+  ;; The whole of `src/acorrd_standards/main.cljc` -- the generic REST actor for the six
+  ;; Aadhaar L4 resources -- as one Kotoba component, on the carrier the aarch64
+  ;; native backend actually admits.
+  ;;
+  ;; This is the same generated actor template as `aave.whole-component`, ported
+  ;; the same way. Three things differ, and none of them is cosmetic:
+  ;;
+  ;;   1. SIX entities, not four.
+  ;;   2. `:refs {:identityId "Account"}` on five of the six specs. In aave all
+  ;;      four specs had `:refs {}`, so `expand` was a fold over nothing and the
+  ;;      sibling had to hand it a SYNTHETIC table to make the branch run. Here
+  ;;      `expand` is live on the production path for Credential, Consent,
+  ;;      Transaction, Document and VerificationRequest.
+  ;;   3. `:coerce {:amount :float}` on Transaction. aave coerced nothing to
+  ;;      `:float`, so its missing `as-float` was a public function of the
+  ;;      oracle that nothing in the component reached. HERE IT IS REACHED. See
+  ;;      `--- coercion ---`; this is the one materially bigger gap.
+  ;;
+  ;; ## Why the rows cross as JSON text and not as `:document`
+  ;;
+  ;; `:document` is the idiomatic carrier for heterogeneous data and `amu
+  ;; check` admits it. The aarch64 backend does not:
+  ;;
+  ;;   amu check   --jvm-free q9-probes/p17-native-carrier.kotoba   -> 0
+  ;;   amu compile ... --target aarch64-macos                       -> 70
+  ;;   "typed values currently require the kotoba-script web target, typed
+  ;;    Wasm target, or qualified native string/scalar-record/option-i64/
+  ;;    result-i64 features"
+  ;;
+  ;; A component that only `check`s cannot be run, and a build is not
+  ;; acceptance. So the rows cross as JSON text, which for a REST actor is not a
+  ;; reshaping of the domain -- it is the wire format the component already
+  ;; speaks.
+  ;;
+  ;; ## Why the store is threaded instead of held
+  ;;
+  ;; `acorrd_standards.main` keeps the store in `(def ^:dynamic *store* (atom {}))` and
+  ;; `swap!`s it. Ambient module state is refused:
+  ;;
+  ;;   q9-probes/p13-atom.kotoba -> "constant value must be closed bounded
+  ;;   integer/string/keyword/boolean/nil/vector/map or non-empty keyword-set
+  ;;   data"
+  ;;
+  ;; That refusal is the language's, on purpose (`:ambient-authority-
+  ;; forbidden`). Every handler in `acorrd_standards.main` ALREADY takes the store as its
+  ;; first argument, so threading it out again is the same product semantics
+  ;; with the cell moved to the host, not a shrunken component.
+  ;;
+  ;; ## The JSON scanner
+  ;;
+  ;; Carried from examples/approval-queue-app.kotoba, which carries it from
+  ;; kotoba-lang/json's json_scalar.kotoba (ADR-2608292330). Escape DECODING is
+  ;; not carried: a string value containing any `\` is read as its raw bytes.
+  ;;
+  ;; ## What is NOT here, measured rather than assumed
+  ;;
+  ;;   * `as-float`, and therefore the `:float` arm of `coerce-field`. `:f64`
+  ;;     and `decimal-f64-parse` pass `amu check` and are refused by the aarch64
+  ;;     backend (q9-probes/g23-f64.kotoba: check 0, native exit 70, message
+  ;;     above). UNLIKE THE AAVE SIBLING, this component reaches that arm:
+  ;;     Transaction declares `:coerce {:amount :float}`, and `amount` is a
+  ;;     REQUIRED field of Transaction. So one of six entities has one field
+  ;;     whose stored representation here is not what `acorrd_standards.main` stores.
+  ;;     The divergence is not hidden: `coerce-field` carries an explicit
+  ;;     `float` arm that preserves the raw JSON token, and
+  ;;     `oracle-float-divergence` measures the difference rather than papering
+  ;;     over it. This port is PARTIAL and says so.
+  ;;   * `now` answers RFC-3339 built from the clock capability; see the
+  ;;     `--- clock ---` section for what the grant actually returns here.
+  (:capabilities #{:clock/now :entropy/draw})
+  (:export [ns-prefix tier default-limit max-limit
+            entity-count entity-at plural-of id-prefix-of fields-of
+            required-of coerce-table-of coerce-of refs-of entities
+            route-count route-method route-path route-op route-entity
+            now rfc3339 new-id rand-hex16 as-int as-bool coerce-field
+            store-empty store-rows store-put store-query store-retract
+            emit-facts require-fields reject-unknown apply-filters
+            paginate-limit paginate-cursor paginate-page paginate-has-more
+            expand handle-create handle-list handle-get handle-update
+            handle-delete healthz start
+            page-limit
+            oracle-page-limit oracle-as-int oracle-as-bool oracle-coerce
+            oracle-route-shape oracle-table oracle-validation oracle-store
+            oracle-filters oracle-paginate oracle-cursor oracle-handlers
+            oracle-healthz oracle-start oracle-facts oracle-expand oracle-clock
+            oracle-entropy oracle-rfc3339 oracle-float-divergence oracle-refs
+            main]))
+
+;; --- constants ------------------------------------------------------------
+
+(defn ns-prefix [] :string "acorrd_standards")
+(defn tier [] :string "L4")
+(defn default-limit [] :i64 20)
+(defn max-limit [] :i64 100)
+
+;; --- json: the scanning algorithm of kotoba-lang/json's json_scalar.kotoba -
+
+(defn cp-width [cp :i64] :i64
+  (cond
+    (< cp 128) 1
+    (< cp 2048) 2
+    (< cp 65536) 3
+    :else 4))
+
+(defn ws? [cp :i64] :bool
+  (or (= cp 32) (or (= cp 9) (or (= cp 10) (= cp 13)))))
+
+(defn skip-ws [doc :string i :i64 len :i64] :i64
+  (if (>= i len)
+    i
+    (if (ws? (string-code-point-at doc i))
+      (skip-ws doc (+ i 1) len)
+      i)))
+
+;; Byte offset of the closing quote of the JSON string whose first CONTENT
+;; byte is I, or -1. A backslash consumes the next byte, always ASCII in
+;; JSON, so +2 stays on a code-point boundary.
+(defn scan-string-end [doc :string i :i64 len :i64] :i64
+  (if (>= i len)
+    -1
+    (let [cp (string-code-point-at doc i)]
+      (cond
+        (= cp 34) i
+        (= cp 92) (scan-string-end doc (+ i 2) len)
+        :else (scan-string-end doc (+ i (cp-width cp)) len)))))
+
+;; End (exclusive) of the bracketed value starting at I. Strings are scanned
+;; as units, so a brace inside a string cannot change DEPTH.
+(defn scan-balanced [doc :string i :i64 len :i64 depth :i64] :i64
+  (if (>= i len)
+    -1
+    (let [cp (string-code-point-at doc i)]
+      (cond
+        (= cp 34) (let [e (scan-string-end doc (+ i 1) len)]
+                    (if (< e 0) -1 (scan-balanced doc (+ e 1) len depth)))
+        (or (= cp 123) (= cp 91)) (scan-balanced doc (+ i 1) len (+ depth 1))
+        (or (= cp 125) (= cp 93)) (if (= depth 1)
+                                    (+ i 1)
+                                    (scan-balanced doc (+ i 1) len (- depth 1)))
+        :else (scan-balanced doc (+ i (cp-width cp)) len depth)))))
+
+;; End (exclusive) of a number/true/false/null: up to `,` `}` `]` or space.
+(defn scan-scalar-end [doc :string i :i64 len :i64] :i64
+  (if (>= i len)
+    i
+    (let [cp (string-code-point-at doc i)]
+      (if (or (= cp 44) (or (= cp 125) (or (= cp 93) (ws? cp))))
+        i
+        (scan-scalar-end doc (+ i (cp-width cp)) len)))))
+
+;; End (exclusive) of a value of any kind starting at I, or -1.
+(defn skip-value [doc :string i :i64 len :i64] :i64
+  (if (>= i len)
+    -1
+    (let [cp (string-code-point-at doc i)]
+      (cond
+        (= cp 34) (let [e (scan-string-end doc (+ i 1) len)]
+                    (if (< e 0) -1 (+ e 1)))
+        (or (= cp 123) (= cp 91)) (scan-balanced doc i len 0)
+        :else (scan-scalar-end doc i len)))))
+
+;; --- json readers this component needs ------------------------------------
+;;
+;; `raw-*` answer the value TEXT as it appears in the document -- `"abc"` with
+;; its quotes, `12`, `true`, `null`, `{...}`, `[...]` -- and "" for absent.
+;; `token-text` then strips the quotes of a string, which makes
+;; `(token-text (raw-field row f))` exactly Clojure's `(str (get row f))` for
+;; every scalar acorrd_standards.main stores, and "" for both an absent field and an
+;; explicit null (which is `(str nil)`).
+
+(defn token-text [raw :string] :string
+  (let [len (string-byte-length raw)]
+    (cond
+      (= len 0) ""
+      (string=? raw "null") ""
+      (< len 2) raw
+      (= (string-code-point-at raw 0) 34) (string-substring raw 1 (- len 1))
+      :else raw)))
+
+;; Walk members from byte I, which is just past `{` or just past a `,`.
+;; Members before the wanted one are skipped STRUCTURALLY, so a nested object,
+;; an array, or a string containing `{` `}` `,` or `:` cannot desynchronise the
+;; scan.
+;;
+;; This is ONE walk written twice because a Kotoba function takes at most five
+;; parameters (`max-parameters` 5; a six-parameter version answers "function
+;; parameters exceed ABI-supported arity", q9-probes/p19-arity.kotoba). The
+;; value walk selects by key name; the key walk selects by position and answers
+;; the KEY, which is `(keys data)` in reject-unknown.
+
+(defn member-value-scan [doc :string key :string i :i64 len :i64] :string
+  (let [a (skip-ws doc i len)]
+    (if (>= a len)
+      ""
+      (if (not= (string-code-point-at doc a) 34)
+        ""
+        (let [ke (scan-string-end doc (+ a 1) len)]
+          (if (< ke 0)
+            ""
+            (let [kraw (string-substring doc (+ a 1) ke)
+                  b (skip-ws doc (+ ke 1) len)]
+              (if (or (>= b len) (not= (string-code-point-at doc b) 58))
+                ""
+                (let [c (skip-ws doc (+ b 1) len)]
+                  (if (>= c len)
+                    ""
+                    (if (string=? kraw key)
+                      (let [e (skip-value doc c len)]
+                        (if (< e 0) "" (string-substring doc c e)))
+                      (let [nx (skip-value doc c len)]
+                        (if (< nx 0)
+                          ""
+                          (let [d (skip-ws doc nx len)]
+                            (if (>= d len)
+                              ""
+                              (if (= (string-code-point-at doc d) 44)
+                                (member-value-scan doc key (+ d 1) len)
+                                ""))))))))))))))))
+
+(defn member-key-scan [doc :string want :i64 i :i64 len :i64 n :i64] :string
+  (let [a (skip-ws doc i len)]
+    (if (>= a len)
+      ""
+      (if (not= (string-code-point-at doc a) 34)
+        ""
+        (let [ke (scan-string-end doc (+ a 1) len)]
+          (if (< ke 0)
+            ""
+            (let [kraw (string-substring doc (+ a 1) ke)
+                  b (skip-ws doc (+ ke 1) len)]
+              (if (or (>= b len) (not= (string-code-point-at doc b) 58))
+                ""
+                (let [c (skip-ws doc (+ b 1) len)]
+                  (if (>= c len)
+                    ""
+                    (if (= want n)
+                      kraw
+                      (let [nx (skip-value doc c len)]
+                        (if (< nx 0)
+                          ""
+                          (let [d (skip-ws doc nx len)]
+                            (if (>= d len)
+                              ""
+                              (if (= (string-code-point-at doc d) 44)
+                                (member-key-scan doc want (+ d 1) len (+ n 1))
+                                ""))))))))))))))))
+
+(defn object-body-start [doc :string] :i64
+  (let [len (string-byte-length doc)
+        i (skip-ws doc 0 len)]
+    (if (>= i len)
+      -1
+      (if (not= (string-code-point-at doc i) 123) -1 (+ i 1)))))
+
+;; The raw text of top-level member KEY, or "" when absent.
+(defn raw-field [doc :string key :string] :string
+  (let [s (object-body-start doc)]
+    (if (< s 0) "" (member-value-scan doc key s (string-byte-length doc)))))
+
+;; The scalar text of top-level member KEY, or "" when absent or null.
+(defn field [doc :string key :string] :string
+  (token-text (raw-field doc key)))
+
+;; The KEY of top-level member N, or "" past the end. This is `(keys data)`,
+;; read one position at a time.
+(defn key-at [doc :string n :i64] :string
+  (let [s (object-body-start doc)]
+    (if (< s 0) "" (member-key-scan doc n s (string-byte-length doc) 0))))
+
+(defn key-count-from [doc :string n :i64] :i64
+  (if (>= n 32)
+    n
+    (if (string=? (key-at doc n) "") n (key-count-from doc (+ n 1)))))
+
+(defn key-count [doc :string] :i64 (key-count-from doc 0))
+
+;; --- json arrays: the row list --------------------------------------------
+
+(defn arr-scan [arr :string i :i64 len :i64 want :i64 n :i64] :string
+  (let [a (skip-ws arr i len)]
+    (if (>= a len)
+      ""
+      (if (= (string-code-point-at arr a) 93)
+        ""
+        (let [e (skip-value arr a len)]
+          (if (< e 0)
+            ""
+            (if (= n want)
+              (string-substring arr a e)
+              (let [d (skip-ws arr e len)]
+                (if (>= d len)
+                  ""
+                  (if (= (string-code-point-at arr d) 44)
+                    (arr-scan arr (+ d 1) len want (+ n 1))
+                    ""))))))))))
+
+(defn arr-at [arr :string i :i64] :string
+  (let [len (string-byte-length arr)]
+    (if (= len 0)
+      ""
+      (if (not= (string-code-point-at arr 0) 91)
+        ""
+        (arr-scan arr 1 len i 0)))))
+
+(defn arr-count-from [arr :string n :i64] :i64
+  (if (>= n 64)
+    n
+    (if (string=? (arr-at arr n) "") n (arr-count-from arr (+ n 1)))))
+
+(defn arr-count [arr :string] :i64 (arr-count-from arr 0))
+
+(defn arr-empty [] :string "[]")
+
+(defn arr-conj [arr :string item :string] :string
+  (let [len (string-byte-length arr)]
+    (if (<= (arr-count arr) 0)
+      (string-concat "[" (string-concat item "]"))
+      (string-concat (string-substring arr 0 (- len 1))
+                     (string-concat "," (string-concat item "]"))))))
+
+;; --- decimals -------------------------------------------------------------
+
+(defn digit-value [cp :i64] :i64
+  (if (or (< cp 48) (> cp 57)) -1 (- cp 48)))
+
+(defn to-i64-from [s :string i :i64 len :i64 acc :i64] :i64
+  (if (>= i len)
+    acc
+    (let [d (digit-value (string-code-point-at s i))]
+      (if (< d 0)
+        0
+        (to-i64-from s (+ i 1) len (+ (* acc 10) d))))))
+
+;; --- the entity table -----------------------------------------------------
+;;
+;; The six rows of `acorrd_standards.main/entity-specs`, byte for byte. Field, required
+;; and coerce lists are comma-separated names, which is what every consumer of
+;; them here does with them (iterate, look up, compare) and is the same carrier
+;; examples/approval-queue-app.kotoba uses for its actor lists. The coerce map
+;; and the refs map are `field:value` pairs, looked up by field.
+
+(defn entity-count [] :i64 6)
+
+(defn entity-at [i :i64] :string
+  (cond
+    (= i 0) "Account"
+    (= i 1) "Loan"
+    (= i 2) "Policy"
+    (= i 3) "Claim"
+    (= i 4) "Transaction"
+    (= i 5) "Customer"
+    :else ""))
+
+(defn plural-of [entity :string] :string
+  (cond
+    (string=? entity "Account") "accounts"
+    (string=? entity "Loan") "loans"
+    (string=? entity "Policy") "policies"
+    (string=? entity "Claim") "claims"
+    (string=? entity "Transaction") "transactions"
+    (string=? entity "Customer") "customers"
+    :else ""))
+
+(defn id-prefix-of [entity :string] :string
+  (cond
+    (string=? entity "Account") "acorrdst_acc"
+    (string=? entity "Loan") "acorrdst_loa"
+    (string=? entity "Policy") "acorrdst_pol"
+    (string=? entity "Claim") "acorrdst_cla"
+    (string=? entity "Transaction") "acorrdst_tra"
+    (string=? entity "Customer") "acorrdst_cus"
+    :else ""))
+
+(defn fields-of [entity :string] :string
+  (cond
+    (string=? entity "Account") "holderId,type,balance,currency,status"
+    (string=? entity "Loan") "borrowerId,principal,rate,termMonths,status"
+    (string=? entity "Policy") "holderId,type,premium,coverage,status"
+    (string=? entity "Claim") "policyId,amount,status,filedAt"
+    (string=? entity "Transaction") "accountId,amount,type,postedAt"
+    (string=? entity "Customer") "name,taxId,kycStatus"
+    :else ""))
+
+(defn required-of [entity :string] :string
+  (cond
+    (string=? entity "Account") "type,balance"
+    (string=? entity "Loan") "principal,rate"
+    (string=? entity "Policy") "type,premium"
+    (string=? entity "Claim") "amount,status"
+    (string=? entity "Transaction") "amount,type"
+    (string=? entity "Customer") "name,kycStatus"
+    :else ""))
+
+;; `:coerce` as `field:kind` pairs. A spec that declares `{}` answers "".
+;; A `float` arm is the one the aarch64 backend refuses -- see `coerce-field`.
+(defn coerce-table-of [entity :string] :string
+  (cond
+    (string=? entity "Account") "balance:float"
+    (string=? entity "Loan") "principal:float,rate:float,termMonths:int"
+    (string=? entity "Policy") "premium:float,coverage:float"
+    (string=? entity "Claim") "amount:float"
+    (string=? entity "Transaction") "amount:float"
+    (string=? entity "Customer") ""
+    :else ""))
+
+;; `:refs` as `field:entity` pairs, comma-separated. A spec with two refs
+;; makes `expand`'s fold run twice over one row.
+(defn refs-of [entity :string] :string
+  (cond
+    (string=? entity "Account") ""
+    (string=? entity "Loan") ""
+    (string=? entity "Policy") ""
+    (string=? entity "Claim") "policyId:Policy"
+    (string=? entity "Transaction") "accountId:Account"
+    (string=? entity "Customer") ""
+    :else ""))
+
+
+;; --- comma-separated name lists -------------------------------------------
+
+(defn seg-end [s :string i :i64 len :i64] :i64
+  (if (>= i len)
+    len
+    (if (= (string-code-point-at s i) 44)
+      i
+      (seg-end s (+ i (cp-width (string-code-point-at s i))) len))))
+
+(defn list-at-from [s :string i :i64 len :i64 want :i64 n :i64] :string
+  (let [e (seg-end s i len)]
+    (if (= n want)
+      (string-substring s i e)
+      (if (>= e len) "" (list-at-from s (+ e 1) len want (+ n 1))))))
+
+(defn list-at [s :string i :i64] :string
+  (let [len (string-byte-length s)]
+    (if (= len 0) "" (list-at-from s 0 len i 0))))
+
+(defn list-count-from [s :string i :i64 len :i64 acc :i64] :i64
+  (let [e (seg-end s i len)]
+    (if (>= e len) (+ acc 1) (list-count-from s (+ e 1) len (+ acc 1)))))
+
+(defn list-count [s :string] :i64
+  (let [len (string-byte-length s)]
+    (if (= len 0) 0 (list-count-from s 0 len 0))))
+
+(defn list-member-from [s :string name :string i :i64 len :i64] :bool
+  (let [e (seg-end s i len)]
+    (if (string=? (string-substring s i e) name)
+      true
+      (if (>= e len) false (list-member-from s name (+ e 1) len)))))
+
+(defn list-member? [s :string name :string] :bool
+  (let [len (string-byte-length s)]
+    (if (= len 0) false (list-member-from s name 0 len))))
+
+(defn list-conj [s :string name :string] :string
+  (if (= (string-byte-length s) 0) name (string-concat s (string-concat "," name))))
+
+(defn string-index-of-colon-from [s :string i :i64 len :i64] :i64
+  (if (>= i len)
+    -1
+    (if (= (string-code-point-at s i) 58)
+      i
+      (string-index-of-colon-from s (+ i 1) len))))
+
+(defn string-index-of-colon [s :string] :i64
+  (string-index-of-colon-from s 0 (string-byte-length s)))
+
+;; The kind of FIELD in the `field:kind` table of ENTITY, or "" -- the
+;; `(get coerce f)` of acorrd_standards.main, which is nil for a field with no rule.
+(defn kind-in [table :string field :string i :i64] :string
+  (let [pair (list-at table i)]
+    (if (string=? pair "")
+      ""
+      (let [c (string-index-of-colon pair)]
+        (if (< c 0)
+          ""
+          (if (string=? (string-substring pair 0 c) field)
+            (string-substring pair (+ c 1) (string-byte-length pair))
+            (kind-in table field (+ i 1))))))))
+
+(defn coerce-of [entity :string field :string] :string
+  (kind-in (coerce-table-of entity) field 0))
+
+(defn entities-from [i :i64 acc :string] :string
+  (if (>= i (entity-count)) acc (entities-from (+ i 1) (list-conj acc (entity-at i)))))
+
+(defn entities [] :string (entities-from 0 ""))
+
+;; --- routes ---------------------------------------------------------------
+;;
+;; `acorrd_standards.main/routes` is `(mapcat five-routes entity-specs)`: five routes per
+;; entity, in POST/GET/GET-id/PATCH/DELETE order. Six entities, so thirty.
+
+(defn route-count [] :i64 (* 5 (entity-count)))
+
+(defn route-entity [i :i64] :string (entity-at (quot i 5)))
+
+(defn route-method [i :i64] :string
+  (let [k (- i (* 5 (quot i 5)))]
+    (cond
+      (= k 0) "POST"
+      (= k 1) "GET"
+      (= k 2) "GET"
+      (= k 3) "PATCH"
+      :else "DELETE")))
+
+(defn route-path [i :i64] :string
+  (let [k (- i (* 5 (quot i 5)))
+        base (string-concat "/v1/" (plural-of (route-entity i)))]
+    (if (or (= k 0) (= k 1)) base (string-concat base "/{id}"))))
+
+(defn route-op [i :i64] :string
+  (let [k (- i (* 5 (quot i 5)))
+        verb (cond
+               (= k 0) "create "
+               (= k 1) "list "
+               (= k 2) "get "
+               (= k 3) "update "
+               :else "delete ")]
+    (string-concat verb (route-entity i))))
+
+;; --- json writing ---------------------------------------------------------
+
+(defn quoted [s :string] :string
+  (string-concat "\"" (string-concat s "\"")))
+
+(defn jkv-raw [k :string raw :string] :string
+  (string-concat (quoted k) (string-concat ":" raw)))
+
+(defn jkv [k :string v :string] :string
+  (jkv-raw k (quoted v)))
+
+(defn jsep [a :string b :string] :string
+  (if (string=? a "") b (string-concat a (string-concat "," b))))
+
+(defn jobj [members :string] :string
+  (string-concat "{" (string-concat members "}")))
+
+;; --- mechanism, as declared capability imports -----------------------------
+;;
+;; `acorrd_standards.main/now` reads a clock and `rand-hex16` reads a randomness source,
+;; both through host interop. ADR-q9 is explicit that a clock or a randomness
+;; source is NOT a reason to keep a component in Clojure: it crosses as a
+;; declared capability import, which is what these two are.
+;;
+;; MEASURED, and not to be read as a working wall clock. The aave sibling's
+;; header says the granted `clock/now` "answers 1"; that is true only at seed
+;; 0. Measured here directly (q9-probes/g24-capability-stub.kotoba, one symbol
+;; per capability, run over five seeds):
+;;
+;;   clock/now(0 1 2 5 100)   grant 7,23 -> 1 2 3 6 101
+;;   entropy/draw(0 1 2 5 100) grant 7,23 -> 1 2 3 6 101
+;;   either, with the grant WITHDRAWN     -> KEXE_TRAP {:kind :signal
+;;                                           :signal :SIGTRAP}, exit 120
+;;
+;; So under tools/kexe_loader.c both capabilities are the stub `seed + 1`, not
+;; a constant and not a real source. The grant is measured in BOTH directions
+;; -- withdrawing it traps rather than silently answering -- so the import is
+;; real even though the value is not. The RFC-3339 rendering below is
+;; therefore exercised at a stub instant by the oracle probes, and
+;; `oracle-clock`/`oracle-entropy` are determinism checks, NOT parity checks
+;; against acorrd_standards.main (whose `now` reads a real clock and whose `rand-hex16`
+;; reads a real UUID; neither is reproducible here by construction).
+
+(defn clock-seconds [seed :i64] :i64 (clock/now seed))
+
+(defn entropy-word [seed :i64] :i64 (entropy/draw seed))
+
+;; --- RFC-3339 from a count of seconds -------------------------------------
+;;
+;; `acorrd_standards.main/now` answers `(str (java.time.Instant/now))`. Kotoba has no
+;; date library, so the civil-from-days algorithm is written here (Howard
+;; Hinnant's `civil_from_days`, integer arithmetic only).
+
+(defn era-of [z :i64] :i64
+  (if (>= z 0) (quot z 146097) (quot (- z 146096) 146097)))
+
+(defn day-of-era [z :i64] :i64 (- z (* (era-of z) 146097)))
+
+(defn year-of-era [doe :i64] :i64
+  (quot (- (+ (- doe (quot doe 1460)) (quot doe 36524)) (quot doe 146096)) 365))
+
+(defn civil-year-raw [days :i64] :i64
+  (let [z (+ days 719468)]
+    (+ (year-of-era (day-of-era z)) (* (era-of z) 400))))
+
+(defn day-of-year [days :i64] :i64
+  (let [doe (day-of-era (+ days 719468))
+        yoe (year-of-era doe)]
+    (- doe (- (+ (* 365 yoe) (quot yoe 4)) (quot yoe 100)))))
+
+(defn month-index [days :i64] :i64
+  (quot (+ (* 5 (day-of-year days)) 2) 153))
+
+(defn civil-month [days :i64] :i64
+  (let [mp (month-index days)]
+    (if (< mp 10) (+ mp 3) (- mp 9))))
+
+(defn civil-day [days :i64] :i64
+  (let [mp (month-index days)]
+    (+ (- (day-of-year days) (quot (+ (* 153 mp) 2) 5)) 1)))
+
+(defn civil-year [days :i64] :i64
+  (if (<= (civil-month days) 2) (+ (civil-year-raw days) 1) (civil-year-raw days)))
+
+(defn pad2 [n :i64] :string
+  (if (< n 10)
+    (string-concat "0" (string-from-i64 n))
+    (string-from-i64 n)))
+
+(defn pad4 [n :i64] :string
+  (cond
+    (< n 10) (string-concat "000" (string-from-i64 n))
+    (< n 100) (string-concat "00" (string-from-i64 n))
+    (< n 1000) (string-concat "0" (string-from-i64 n))
+    :else (string-from-i64 n)))
+
+(defn rfc3339 [secs :i64] :string
+  (let [days (quot secs 86400)
+        rest (- secs (* days 86400))
+        date (string-join "-" (pad4 (civil-year days))
+                          (pad2 (civil-month days))
+                          (pad2 (civil-day days)))
+        time (string-join ":" (pad2 (quot rest 3600))
+                          (pad2 (- (quot rest 60) (* 60 (quot rest 3600))))
+                          (pad2 (- rest (* 60 (quot rest 60)))))]
+    (string-concat date (string-concat "T" (string-concat time "Z")))))
+
+(defn now [seed :i64] :string (rfc3339 (clock-seconds seed)))
+
+;; --- new-id ---------------------------------------------------------------
+;;
+;; `acorrd_standards.main/new-id` is `prefix "_" (subs (uuid without dashes) 0 16)`: a
+;; prefix, an underscore, and sixteen hex digits.
+
+(defn hex-digits [] :string "0123456789abcdef")
+
+;; The nibble at position I. A shift COUNT must be an integer literal in
+;; [0,63] ("i64 shift count must be an integer literal in [0,63]",
+;; q9-probes/p20-shift-count.kotoba), and I is a loop variable, so the shift is
+;; a repeated divide. The sign bit is masked first so that `quot`, which
+;; truncates toward zero, agrees with a logical shift on every input.
+(defn div16 [w :i64 i :i64] :i64
+  (if (<= i 0) w (div16 (quot w 16) (- i 1))))
+
+(defn nibble [w :i64 i :i64] :string
+  (let [v (bit-and (div16 w i) 15)]
+    (string-substring (hex-digits) v (+ v 1))))
+
+(defn hex16-from [w :i64 i :i64 acc :string] :string
+  (if (>= i 16) acc (hex16-from w (+ i 1) (string-concat acc (nibble w i)))))
+
+(defn rand-hex16 [seed :i64] :string
+  (hex16-from (bit-and (entropy-word seed) 9223372036854775807) 0 ""))
+
+(defn new-id [prefix :string seed :i64] :string
+  (string-concat prefix (string-concat "_" (rand-hex16 seed))))
+
+;; --- coercion -------------------------------------------------------------
+
+(defn lower-alphabet [] :string "abcdefghijklmnopqrstuvwxyz")
+
+(defn lower-cp [s :string i :i64] :string
+  (let [cp (string-code-point-at s i)]
+    (if (and (>= cp 65) (<= cp 90))
+      (string-substring (lower-alphabet) (- cp 65) (- cp 64))
+      (string-substring s i (+ i (cp-width cp))))))
+
+;; `str/lower`. `string-fold-case` is a head and passes `amu check`, and the
+;; aarch64 backend refuses it (q9-probes/p18-native-refusals.kotoba), so the
+;; ASCII case fold is written out. Only ASCII is folded, which is all the four
+;; literals as-bool compares against need.
+(defn ascii-lower-from [s :string i :i64 len :i64 acc :string] :string
+  (if (>= i len)
+    acc
+    (let [cp (string-code-point-at s i)]
+      (ascii-lower-from s (+ i (cp-width cp)) len (string-concat acc (lower-cp s i))))))
+
+(defn ascii-lower [s :string] :string
+  (ascii-lower-from s 0 (string-byte-length s) ""))
+
+(defn trim-left [s :string i :i64 len :i64] :i64
+  (if (>= i len) i (if (ws? (string-code-point-at s i)) (trim-left s (+ i 1) len) i)))
+
+(defn trim-right [s :string e :i64] :i64
+  (if (<= e 0) e (if (ws? (string-code-point-at s (- e 1))) (trim-right s (- e 1)) e)))
+
+(defn trim [s :string] :string
+  (let [len (string-byte-length s)
+        a (trim-left s 0 len)
+        b (trim-right s len)]
+    (if (>= a b) "" (string-substring s a b))))
+
+;; `acorrd_standards.main/as-int`: a number stays, a string is parsed after trimming, and
+;; a parse failure or anything else answers 0. The argument here is the token
+;; TEXT, so a JSON number and a JSON string of digits arrive the same way,
+;; which is what `(cond (number? v) ... (string? v) ...)` does with them.
+(defn as-int [text :string] :i64
+  (let [t (trim text)
+        len (string-byte-length t)]
+    (cond
+      (= len 0) 0
+      (= (string-code-point-at t 0) 45) (- 0 (to-i64-from t 1 len 0))
+      :else (to-i64-from t 0 len 0))))
+
+;; `acorrd_standards.main/as-bool`: nil is false, a string is lower-cased, and the result
+;; must be one of "1" "true" "yes" "on" (or boolean true, which arrives here
+;; as the token "true").
+(defn as-bool [text :string] :bool
+  (let [t (ascii-lower (trim text))]
+    (or (string=? t "1")
+        (or (string=? t "true") (or (string=? t "yes") (string=? t "on"))))))
+
+;; `acorrd_standards.main/as-float` is NOT here, and unlike the aave sibling that is not
+;; a harmless absence.
+;;
+;;   amu check   --jvm-free q9-probes/g23-f64.kotoba  -> 0
+;;   amu compile ... --target aarch64-macos           -> 70
+;;   "typed values currently require the kotoba-script web target, typed Wasm
+;;    target, or qualified native string/scalar-record/option-i64/result-i64
+;;    features"
+;;
+;; Transaction declares `:coerce {:amount :float}` and `amount` is one of its
+;; two REQUIRED fields, so `coerce-field` is called with kind "float" on the
+;; production create/update path for one of the six entities. The `float` arm
+;; below is written out explicitly rather than left to fall through, so that the
+;; divergence is visible in the source instead of being an accident of cond
+;; ordering: it preserves the raw JSON token where `acorrd_standards.main` would store a
+;; double. `oracle-float-divergence` measures exactly where the two disagree.
+(defn coerce-field [kind :string raw :string] :string
+  (cond
+    (string=? kind "int") (string-from-i64 (as-int (token-text raw)))
+    (string=? kind "bool") (if (as-bool (token-text raw)) "true" "false")
+    (string=? raw "") "null"
+    ;; BLOCKED arm: `:float`. Raw token preserved; see the note above.
+    (string=? kind "float") raw
+    :else raw))
+
+;; --- the store ------------------------------------------------------------
+;;
+;; `(atom {})` keyed by entity then id. Held as one JSON object with one member
+;; per entity, whose value is the row array. Rows keep insertion order, which
+;; the `starting_after` cursor in paginate needs and a Clojure map's `vals`
+;; does not promise.
+
+(defn rows-of [store :string entity :string] :string
+  (let [r (raw-field store entity)]
+    (if (string=? r "") (arr-empty) r)))
+
+(defn store-members [store :string entity :string rows :string i :i64 acc :string] :string
+  (if (>= i (entity-count))
+    acc
+    (let [e (entity-at i)
+          v (if (string=? e entity) rows (rows-of store e))]
+      (store-members store entity rows (+ i 1) (jsep acc (jkv-raw e v))))))
+
+(defn store-assoc [store :string entity :string rows :string] :string
+  (jobj (store-members store entity rows 0 "")))
+
+(defn store-empty [] :string (store-assoc "{}" "" (arr-empty)))
+
+(defn store-rows [store :string entity :string] :string (rows-of store entity))
+
+(defn rows-index-of [rows :string id :string i :i64] :i64
+  (let [r (arr-at rows i)]
+    (cond
+      (string=? r "") -1
+      (string=? (field r "id") id) i
+      :else (rows-index-of rows id (+ i 1)))))
+
+(defn rows-replace-from [rows :string at :i64 item :string i :i64 acc :string] :string
+  (let [r (arr-at rows i)]
+    (if (string=? r "")
+      acc
+      (rows-replace-from rows at item (+ i 1)
+                         (arr-conj acc (if (= i at) item r))))))
+
+(defn rows-remove-from [rows :string at :i64 i :i64 acc :string] :string
+  (let [r (arr-at rows i)]
+    (if (string=? r "")
+      acc
+      (rows-remove-from rows at (+ i 1) (if (= i at) acc (arr-conj acc r))))))
+
+;; `persist!`: replace the row with this id, or append it.
+(defn store-put [store :string entity :string rec :string] :string
+  (let [rows (rows-of store entity)
+        at (rows-index-of rows (field rec "id") 0)]
+    (store-assoc store entity
+                 (if (< at 0)
+                   (arr-conj rows rec)
+                   (rows-replace-from rows at rec 0 (arr-empty))))))
+
+;; `query`: the one row with this id, or "".
+(defn store-query [store :string entity :string id :string] :string
+  (let [rows (rows-of store entity)
+        at (rows-index-of rows id 0)]
+    (if (< at 0) "" (arr-at rows at))))
+
+;; `retract!`
+(defn store-retract [store :string entity :string id :string] :string
+  (let [rows (rows-of store entity)
+        at (rows-index-of rows id 0)]
+    (if (< at 0)
+      store
+      (store-assoc store entity (rows-remove-from rows at 0 (arr-empty))))))
+
+;; --- emit-facts -----------------------------------------------------------
+;;
+;; `{"acorrd_standards.<Entity>/<field>" v ...}` for one record.
+
+(defn fact-attribute [entity :string k :string] :string
+  (string-concat (ns-prefix)
+                 (string-concat "."
+                                (string-concat entity
+                                               (string-concat "/" k)))))
+
+(defn facts-from [entity :string rec :string i :i64 acc :string] :string
+  (let [k (key-at rec i)]
+    (if (string=? k "")
+      acc
+      (facts-from entity rec (+ i 1)
+                  (jsep acc (jkv-raw (fact-attribute entity k) (raw-field rec k)))))))
+
+(defn emit-facts [entity :string rec :string] :string
+  (jobj (facts-from entity rec 0 "")))
+
+;; --- validation -----------------------------------------------------------
+
+(defn error-body [message :string kind :string] :string
+  (jobj (jkv-raw "error" (jobj (jsep (jkv "message" message) (jkv "type" kind))))))
+
+(defn missing-from [data :string required :string i :i64 acc :string] :string
+  (let [f (list-at required i)]
+    (if (string=? f "")
+      acc
+      (missing-from data required (+ i 1)
+                    (if (string=? (field data f) "") (list-conj acc f) acc)))))
+
+;; `(str/join ", " ...)`. `string-join` takes at most eight parts, so the join
+;; is folded rather than applied.
+(defn comma-space [s :string i :i64 acc :string] :string
+  (let [f (list-at s i)]
+    (if (string=? f "")
+      acc
+      (comma-space s (+ i 1)
+                   (if (string=? acc "") f (string-concat acc (string-concat ", " f)))))))
+
+(defn require-fields [data :string required :string] :string
+  (let [missing (missing-from data required 0 "")]
+    (if (string=? missing "")
+      ""
+      (error-body (string-concat "Missing required fields: " (comma-space missing 0 ""))
+                  "invalid_request_error"))))
+
+(defn extra-from [data :string allowed :string i :i64 acc :string] :string
+  (let [k (key-at data i)]
+    (if (string=? k "")
+      acc
+      (extra-from data allowed (+ i 1)
+                  (if (list-member? allowed k) acc (list-conj acc k))))))
+
+(defn reject-unknown [data :string allowed :string] :string
+  (let [extra (extra-from data allowed 0 "")]
+    (if (string=? extra "")
+      ""
+      (error-body (string-concat "Unknown fields: " (comma-space extra 0 ""))
+                  "invalid_request_error"))))
+
+;; --- list helpers ---------------------------------------------------------
+
+(defn rows-keep-from [rows :string f :string want :string i :i64 acc :string] :string
+  (let [r (arr-at rows i)]
+    (if (string=? r "")
+      acc
+      (rows-keep-from rows f want (+ i 1)
+                      (if (string=? (field r f) want) (arr-conj acc r) acc)))))
+
+(defn filters-from [rows :string params :string fields :string i :i64] :string
+  (let [f (list-at fields i)]
+    (if (string=? f "")
+      rows
+      (let [want (field params f)]
+        (filters-from (if (string=? want "")
+                        rows
+                        (rows-keep-from rows f want 0 (arr-empty)))
+                      params fields (+ i 1))))))
+
+(defn apply-filters [rows :string params :string fields :string] :string
+  (filters-from rows params fields 0))
+
+;; `acorrd_standards.main/page-limit`, the retained CLJC oracle for
+;; src/acorrd_standards/page_limit.kotoba. NOTE: the aave sibling also carried
+;; `clamp-limit`, `has-more?` and `as-int-kernel` beside it, because
+;; `aave.main` defines those three as public functions. `acorrd_standards.main` does
+;; NOT define them, so they are absent here on purpose -- adding them would be
+;; porting a surface the oracle does not have.
+(defn page-limit [requested :i64] :i64
+  (if (> requested 0)
+    (if (> requested (max-limit)) (max-limit) requested)
+    (default-limit)))
+
+(defn has-more? [remaining :i64 limit :i64] :bool (> remaining limit))
+
+(defn paginate-limit [params :string] :i64
+  (page-limit (as-int (field params "limit"))))
+
+(defn rows-slice-from [rows :string lo :i64 hi :i64 i :i64 acc :string] :string
+  (let [r (arr-at rows i)]
+    (if (string=? r "")
+      acc
+      (rows-slice-from rows lo hi (+ i 1)
+                       (if (and (>= i lo) (< i hi)) (arr-conj acc r) acc)))))
+
+;; The rows after the cursor row, or all rows when the cursor names no row --
+;; `(if (>= idx 0) (drop (inc idx) rows) rows)`.
+(defn paginate-cursor [rows :string params :string] :string
+  (let [start (field params "starting_after")]
+    (if (string=? start "")
+      rows
+      (let [at (rows-index-of rows start 0)]
+        (if (< at 0)
+          rows
+          (rows-slice-from rows (+ at 1) (arr-count rows) 0 (arr-empty)))))))
+
+(defn paginate-page [rows :string params :string] :string
+  (rows-slice-from (paginate-cursor rows params) 0 (paginate-limit params) 0 (arr-empty)))
+
+(defn paginate-has-more [rows :string params :string] :bool
+  (has-more? (arr-count (paginate-cursor rows params)) (paginate-limit params)))
+
+;; --- expand ---------------------------------------------------------------
+;;
+;; Five of the six specs carry `:refs {:identityId "Account"}`, so this fold is
+;; LIVE for Credential, Consent, Transaction, Document and VerificationRequest
+;; -- `handle-get` on any of those five reaches it with the real table from
+;; `refs-of`. (In the aave sibling every spec was `:refs {}` and this code was
+;; only ever exercised by a synthetic table.)
+
+(defn obj-assoc [obj :string k :string raw :string] :string
+  (let [len (string-byte-length obj)]
+    (cond
+      (< len 2) (jobj (jkv-raw k raw))
+      (<= (key-count obj) 0) (jobj (jkv-raw k raw))
+      :else (string-concat (string-substring obj 0 (- len 1))
+                           (string-concat "," (string-concat (jkv-raw k raw) "}"))))))
+
+(defn expand-one [store :string rec :string pair :string want :string] :string
+  (let [c (string-index-of-colon pair)]
+    (if (< c 0)
+      rec
+      (let [f (string-substring pair 0 c)
+            ent (string-substring pair (+ c 1) (string-byte-length pair))
+            v (field rec f)]
+        (if (and (list-member? want f) (not (string=? v "")))
+          (let [row (store-query store ent v)]
+            (obj-assoc rec (string-concat f "_obj") (if (string=? row "") "null" row)))
+          rec)))))
+
+(defn expand-from [store :string rec :string params :string refs :string i :i64] :string
+  (let [pair (list-at refs i)]
+    (if (string=? pair "")
+      rec
+      (expand-from store (expand-one store rec pair (field params "expand"))
+                   params refs (+ i 1)))))
+
+(defn expand [store :string rec :string params :string refs :string] :string
+  (expand-from store rec params refs 0))
+
+;; --- handlers -------------------------------------------------------------
+;;
+;; The oracle returns `[body status]` and mutates the store behind an atom.
+;; Here the store is threaded, so a handler answers all three:
+;;   {"status": <i64>, "body": <json>, "store": <json>}
+
+(defn envelope [status :i64 body :string store :string] :string
+  (jobj (jsep (jsep (jkv-raw "status" (string-from-i64 status)) (jkv-raw "body" body))
+              (jkv-raw "store" store))))
+
+(defn not-found [store :string] :string
+  (envelope 404 (error-body "Not found" "not_found") store))
+
+(defn rec-fields-from [data :string entity :string i :i64 acc :string] :string
+  (let [f (list-at (fields-of entity) i)]
+    (if (string=? f "")
+      acc
+      (rec-fields-from data entity (+ i 1)
+                       (jsep acc (jkv-raw f (coerce-field (coerce-of entity f)
+                                                          (raw-field data f))))))))
+
+(defn created-record [entity :string data :string id :string stamp :string] :string
+  (jobj (jsep (jsep (jkv "id" id) (rec-fields-from data entity 0 ""))
+              (jsep (jkv "createdAt" stamp) (jkv "updatedAt" stamp)))))
+
+(defn handle-create [store :string entity :string data :string seed :i64] :string
+  (let [unknown (reject-unknown data (fields-of entity))]
+    (if (not (string=? unknown ""))
+      (envelope 400 unknown store)
+      (let [missing (require-fields data (required-of entity))]
+        (if (not (string=? missing ""))
+          (envelope 400 missing store)
+          (let [rec (created-record entity data
+                                    (new-id (id-prefix-of entity) seed)
+                                    (now seed))]
+            (envelope 201 rec (store-put store entity rec))))))))
+
+(defn list-body [page :string more :bool n :i64 total :i64] :string
+  (jobj (jsep (jsep (jkv "object" "list") (jkv-raw "data" page))
+              (jsep (jkv-raw "has_more" (if more "true" "false"))
+                    (jsep (jkv-raw "count" (string-from-i64 n))
+                          (jkv-raw "total" (string-from-i64 total)))))))
+
+(defn handle-list [store :string entity :string params :string] :string
+  (let [rows (apply-filters (store-rows store entity) params (fields-of entity))
+        page (paginate-page rows params)]
+    (envelope 200
+              (list-body page (paginate-has-more rows params)
+                         (arr-count page) (arr-count rows))
+              store)))
+
+(defn handle-get [store :string entity :string id :string params :string] :string
+  (let [row (store-query store entity id)]
+    (if (string=? row "")
+      (not-found store)
+      (envelope 200 (expand store row params (refs-of entity)) store))))
+
+;; `reduce-kv` over the submitted body, skipping :id and :createdAt.
+(defn patched-from [row :string entity :string data :string i :i64 acc :string] :string
+  (let [k (key-at data i)]
+    (if (string=? k "")
+      acc
+      (patched-from row entity data (+ i 1)
+                    (if (or (string=? k "id") (string=? k "createdAt"))
+                      acc
+                      (jsep acc (jkv-raw k (coerce-field (coerce-of entity k)
+                                                         (raw-field data k)))))))))
+
+(defn kept-from [row :string data :string i :i64 acc :string] :string
+  (let [k (key-at row i)]
+    (if (string=? k "")
+      acc
+      (kept-from row data (+ i 1)
+                 (if (or (string=? k "updatedAt")
+                         (and (not (string=? k "id"))
+                              (and (not (string=? k "createdAt"))
+                                   (not (string=? (raw-field data k) "")))))
+                   acc
+                   (jsep acc (jkv-raw k (raw-field row k))))))))
+
+(defn updated-record [row :string entity :string data :string stamp :string] :string
+  (jobj (jsep (jsep (kept-from row data 0 "") (patched-from row entity data 0 ""))
+              (jkv "updatedAt" stamp))))
+
+(defn handle-update [store :string entity :string id :string data :string seed :i64] :string
+  (let [row (store-query store entity id)]
+    (if (string=? row "")
+      (not-found store)
+      (let [unknown (reject-unknown data (fields-of entity))]
+        (if (not (string=? unknown ""))
+          (envelope 400 unknown store)
+          (let [rec (updated-record row entity data (now seed))]
+            (envelope 200 rec (store-put store entity rec))))))))
+
+(defn handle-delete [store :string entity :string id :string] :string
+  (if (string=? (store-query store entity id) "")
+    (not-found store)
+    (envelope 200
+              (jobj (jsep (jkv "id" id) (jkv-raw "deleted" "true")))
+              (store-retract store entity id))))
+
+;; --- healthz --------------------------------------------------------------
+
+(defn entities-json-from [i :i64 acc :string] :string
+  (if (>= i (entity-count))
+    acc
+    (entities-json-from (+ i 1) (arr-conj acc (quoted (entity-at i))))))
+
+(defn healthz [] :string
+  (envelope 200
+            (jobj (jsep (jsep (jkv "status" "ok") (jkv "actor" "acorrd_standards-compat"))
+                        (jsep (jkv "tier" (tier))
+                              (jkv-raw "entities" (entities-json-from 0 (arr-empty))))))
+            "{}"))
+
+;; --- runtime registration -------------------------------------------------
+;;
+;; `acorrd_standards.main/start!` answers `:acorrd_standards-compat/ready` to the kotodama host.
+
+(defn start [] :keyword :acorrd_standards-compat/ready)
+
+;; --- oracle probes --------------------------------------------------------
+;;
+;; tools/kexe_loader.c passes i64 arguments and prints an i64, so a function
+;; whose answer is a document has to be driven through a window the loader can
+;; see. `str-hash` is that window: an order-sensitive rolling hash, mod a
+;; prime small enough that the same arithmetic is exact in a JS double, so the
+;; Clojure oracle in q9-oracle.cljs computes it the same way over
+;; `acorrd_standards.main`'s own answers. A wrong byte anywhere changes the number.
+;;
+;; The fixtures below are ASCII, so walking by byte and walking by code point
+;; are the same walk.
+
+;; `rem` is not a head at this pin ("unknown operation: rem is not a builtin,
+;; a sugar head, or a function of this module"), so the remainder is written
+;; out. Both operands here are non-negative, where `quot`'s truncation and a
+;; floor division agree.
+(defn modulo [a :i64 m :i64] :i64 (- a (* (quot a m) m)))
+
+(defn hash-from [s :string i :i64 len :i64 acc :i64] :i64
+  (if (>= i len)
+    acc
+    (hash-from s (+ i 1) len
+               (modulo (+ (* acc 131) (string-code-point-at s i)) 1000000007))))
+
+(defn str-hash [s :string] :i64 (hash-from s 0 (string-byte-length s) 7))
+
+(defn fixture-data [sel :i64] :string
+  (cond
+    (= sel 0) "{\"type\":\"v\",\"balance\":\"v\"}"
+    (= sel 1) "{\"type\":\"v\"}"
+    (= sel 2) "{\"type\":\"v\",\"balance\":\"v\",\"bogus\":\"x\"}"
+    (= sel 3) "{\"type\":\"v\",\"balance\":\"v\"}"
+    (= sel 4) "{\"amount\":\"v\",\"status\":\"v\"}"
+    :else "{}"))
+
+
+(defn fixture-text [sel :i64] :string
+  (cond
+    (= sel 0) "12"
+    (= sel 1) " 42 "
+    (= sel 2) "-7"
+    (= sel 3) "12abc"
+    (= sel 4) ""
+    (= sel 5) "true"
+    (= sel 6) "TRUE"
+    (= sel 7) "Yes"
+    (= sel 8) "on"
+    (= sel 9) "1"
+    (= sel 10) "0"
+    (= sel 11) "false"
+    (= sel 12) "null"
+    :else "nope"))
+
+(defn oracle-page-limit [requested :i64] :i64
+  (paginate-limit (jobj (jkv-raw "limit" (string-from-i64 requested)))))
+
+(defn oracle-as-int [sel :i64] :i64 (as-int (fixture-text sel)))
+
+(defn oracle-as-bool [sel :i64] :i64 (if (as-bool (fixture-text sel)) 1 0))
+
+(defn oracle-coerce [sel :i64] :i64
+  (str-hash (cond
+              (= sel 0) (coerce-field "int" "\" 42 \"")
+              (= sel 1) (coerce-field "int" "7")
+              (= sel 2) (coerce-field "bool" "\"YES\"")
+              (= sel 3) (coerce-field "bool" "false")
+              (= sel 4) (coerce-field "" "\"abc\"")
+              (= sel 5) (coerce-field "" "")
+              :else (coerce-field "int" ""))))
+
+;; The `:float` arm, isolated. Each selector is one input on which
+;; `acorrd_standards.main/coerce-field :float` and this component's `float` arm are
+;; compared directly in q9-oracle.cljs; a disagreement here is the measured
+;; size of the as-float gap, not a rendering artifact.
+(defn oracle-float-divergence [sel :i64] :i64
+  (str-hash (cond
+              (= sel 0) (coerce-field "float" "12.5")
+              (= sel 1) (coerce-field "float" "\"12.5\"")
+              (= sel 2) (coerce-field "float" "\"abc\"")
+              (= sel 3) (coerce-field "float" "0")
+              :else (coerce-field "float" ""))))
+
+(defn oracle-route-shape [i :i64] :i64
+  (str-hash (string-join " " (route-method i) (route-path i)
+                         (string-concat (route-op i) (string-concat "|" (route-entity i))))))
+
+(defn oracle-table [i :i64] :i64
+  (let [e (entity-at i)]
+    (str-hash (string-join "|" e (plural-of e) (id-prefix-of e)
+                           (fields-of e) (required-of e) (coerce-table-of e)))))
+
+;; The refs table itself, per entity -- live data here, unlike the sibling.
+(defn oracle-refs [i :i64] :i64 (str-hash (refs-of (entity-at i))))
+
+(defn oracle-validation [sel :i64] :i64
+  (str-hash (cond
+              (= sel 0) (require-fields (fixture-data 0) (required-of "Account"))
+              (= sel 1) (require-fields (fixture-data 1) (required-of "Account"))
+              (= sel 2) (reject-unknown (fixture-data 0) (fields-of "Account"))
+              (= sel 3) (reject-unknown (fixture-data 2) (fields-of "Account"))
+              (= sel 4) (require-fields (fixture-data 5) (required-of "Account"))
+              :else (reject-unknown (fixture-data 3) (fields-of "Account")))))
+
+(defn seeded-row [i :i64] :string
+  (jobj (jsep (jsep (jkv "id" (string-concat "acorrdst_acc_" (string-from-i64 i)))
+                    (jkv-raw "holderId" (string-from-i64 i)))
+              (jsep (jkv "type" "v") (jkv "balance" "v")))))
+
+
+(defn seeded-store-from [store :string i :i64 n :i64] :string
+  (if (>= i n)
+    store
+    (seeded-store-from (store-put store "Account" (seeded-row i)) (+ i 1) n)))
+
+(defn seeded-store [n :i64] :string (seeded-store-from (store-empty) 0 n))
+
+;; A Claim row pointing at Account `acorrdst_acc_<i>` through BOTH of its ref
+;; fields. This is where the port stops being a rename of the aadhaar one:
+;; every spec there carried exactly one ref, so `expand`'s fold ran with a
+;; single pair, and a fold over one is not a fold. `:refs {:policyId
+;; "Account" :policyId "Account"}` makes it run twice over one row, which is the
+;; first time `refs-of`'s comma-separated list is parsed as a LIST on the
+;; production path.
+(defn cred-row [i :i64] :string
+  (jobj (jsep (jsep (jkv "id" (string-concat "acorrdst_cla_" (string-from-i64 i)))
+                    (jkv "policyId" (string-concat "acorrdst_acc_" (string-from-i64 i))))
+              (jsep (jkv "policyId" (string-concat "acorrdst_acc_" (string-from-i64 i)))
+                    (jkv-raw "quantity" (string-from-i64 i))))))
+
+(defn seeded-both [n :i64] :string
+  (store-put (seeded-store n) "Claim" (cred-row 1)))
+
+(defn oracle-store [sel :i64] :i64
+  (cond
+    (= sel 0) (arr-count (store-rows (seeded-store 3) "Account"))
+    (= sel 1) (str-hash (store-query (seeded-store 3) "Account" "acorrdst_acc_1"))
+    (= sel 2) (str-hash (store-query (seeded-store 3) "Account" "nope"))
+    (= sel 3) (arr-count (store-rows (store-retract (seeded-store 3) "Account" "acorrdst_acc_1")
+                                     "Account"))
+    (= sel 4) (arr-count (store-rows (store-retract (seeded-store 3) "Account" "nope")
+                                     "Account"))
+    (= sel 5) (arr-count (store-rows (store-put (seeded-store 3) "Account" (seeded-row 1))
+                                     "Account"))
+    (= sel 6) (str-hash (seeded-store 2))
+    :else (arr-count (store-rows (seeded-store 3) "Claim"))))
+
+(defn oracle-filters [sel :i64] :i64
+  (let [rows (store-rows (seeded-store 5) "Account")
+        fields (fields-of "Account")]
+    (cond
+      (= sel 0) (arr-count (apply-filters rows "{}" fields))
+      (= sel 1) (arr-count (apply-filters rows "{\"jurisdiction\":\"IN\"}" fields))
+      (= sel 2) (arr-count (apply-filters rows "{\"jurisdiction\":\"\"}" fields))
+      (= sel 3) (arr-count (apply-filters rows "{\"externalId\":\"3\"}" fields))
+      (= sel 4) (arr-count (apply-filters rows "{\"externalId\":\"99\"}" fields))
+      :else (arr-count (apply-filters rows "{\"notAField\":\"x\"}" fields)))))
+
+(defn oracle-paginate [n :i64 requested :i64] :i64
+  (let [rows (store-rows (seeded-store n) "Account")
+        params (jobj (jkv-raw "limit" (string-from-i64 requested)))]
+    (+ (* 10 (arr-count (paginate-page rows params)))
+       (if (paginate-has-more rows params) 1 0))))
+
+(defn oracle-cursor [n :i64 after :i64] :i64
+  (let [rows (store-rows (seeded-store n) "Account")
+        params (jobj (jkv "starting_after" (string-concat "acorrdst_acc_" (string-from-i64 after))))]
+    (arr-count (paginate-cursor rows params))))
+
+(defn oracle-handlers [sel :i64] :i64
+  (let [store (seeded-store 2)]
+    (cond
+      (= sel 0) (as-int (field (handle-create store "Account" (fixture-data 0) 1) "status"))
+      (= sel 1) (as-int (field (handle-create store "Account" (fixture-data 1) 1) "status"))
+      (= sel 2) (as-int (field (handle-create store "Account" (fixture-data 2) 1) "status"))
+      (= sel 3) (as-int (field (handle-list store "Account" "{}") "status"))
+      (= sel 4) (as-int (field (handle-get store "Account" "acorrdst_acc_0" "{}") "status"))
+      (= sel 5) (as-int (field (handle-get store "Account" "nope" "{}") "status"))
+      (= sel 6) (as-int (field (handle-update store "Account" "acorrdst_acc_0"
+                                              "{\"jurisdiction\":\"US\"}" 1) "status"))
+      (= sel 7) (as-int (field (handle-update store "Account" "nope" "{}" 1) "status"))
+      (= sel 8) (as-int (field (handle-delete store "Account" "acorrdst_acc_0") "status"))
+      (= sel 9) (as-int (field (handle-delete store "Account" "nope") "status"))
+      (= sel 10) (arr-count (store-rows (raw-field (handle-delete store "Account" "acorrdst_acc_0")
+                                                   "store")
+                                        "Account"))
+      (= sel 11) (arr-count (store-rows (raw-field (handle-create store "Account"
+                                                                 (fixture-data 0) 1)
+                                                   "store")
+                                        "Account"))
+      (= sel 12) (as-int (field (raw-field (handle-list store "Account" "{}") "body") "total"))
+      (= sel 13) (str-hash (field (raw-field (handle-update store "Account" "acorrdst_acc_0"
+                                                            "{\"jurisdiction\":\"US\"}" 1)
+                                             "body")
+                                  "jurisdiction"))
+      :else (str-hash (raw-field (handle-get store "Account" "acorrdst_acc_1" "{}") "body")))))
+
+(defn oracle-healthz [] :i64 (str-hash (healthz)))
+
+(defn oracle-start [] :i64 (string-byte-length (keyword-name (start))))
+
+(defn oracle-facts [sel :i64] :i64
+  (str-hash (emit-facts "Account" (seeded-row sel))))
+
+;; `refs-of` answers a REAL pair for five of the six entities, so selector 0 is
+;; the production path: a Credential row expanded through `refs-of "Claim"`
+;; against a store that holds the Account it names.
+;;
+;; The field names here are this repository's, and that is not cosmetic. The
+;; aadhaar port asked for `identityId`; carried over unchanged, every selector
+;; below would name a field Claim does not have, `expand` would fold over
+;; nothing, and all four arms would return the unexpanded record -- four green
+;; assertions measuring an empty fold. Selector 0 asks for ONE of Claim's two
+;; refs and selector 4 asks for BOTH, which is the arm no earlier pilot had.
+;; Selector 1 asks for a field that is not in `expand`, 2 points at a Account that
+;; is not in the store (the `null` arm), and 3 is an entity whose refs really
+;; are empty.
+(defn oracle-expand [sel :i64] :i64
+  (let [store (seeded-both 3)
+        rec (cred-row 1)]
+    (cond
+      (= sel 0) (str-hash (expand store rec "{\"expand\":\"policyId\"}"
+                                  (refs-of "Claim")))
+      (= sel 1) (str-hash (expand store rec "{\"expand\":\"other\"}"
+                                  (refs-of "Claim")))
+      (= sel 2) (str-hash (expand store (cred-row 9) "{\"expand\":\"policyId\"}"
+                                  (refs-of "Claim")))
+      (= sel 3) (str-hash (expand store rec "{\"expand\":\"policyId\"}"
+                                  (refs-of "Account")))
+      (= sel 4) (str-hash (expand store rec "{\"expand\":\"policyId,policyId\"}"
+                                  (refs-of "Claim")))
+      :else (str-hash rec))))
+
+(defn oracle-clock [seed :i64] :i64 (str-hash (now seed)))
+
+(defn oracle-entropy [seed :i64] :i64 (str-hash (new-id "acorrdst_acc" seed)))
+
+(defn oracle-rfc3339 [secs :i64] :i64 (str-hash (rfc3339 secs)))
+
+(defn main [] :i64 (route-count))
