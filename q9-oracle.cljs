@@ -25,12 +25,35 @@
    demonstrated that it can detect a mismatch, and is not a pass. A run on a
    JVM would legitimately agree on that row; say which runtime produced any
    result."
-  (:require [acorrd-standards.main :as m]))
+  (:require [acorrd-standards.main :as m]
+            [clojure.string :as str]))
 
 ;; Byte-identical in every hand-written harness in this cohort.
 (def fixture-text
   {0 "12" 1 " 42 " 2 "-7" 3 "12abc" 4 "" 5 "true" 6 "TRUE" 7 "Yes" 8 "on"
    9 "1" 10 "0" 11 "false" 12 "null" 13 "nope"})
+
+;; The same rolling hash the .kotoba computes: acc*131 + code point, mod
+;; 1000000007, seeded 7. Every intermediate stays under 2^53, so a JS double
+;; holds it exactly.
+(defn str-hash [x]
+  (reduce (fn [acc ch] (mod (+ (* acc 131) (.charCodeAt ch 0)) 1000000007)) 7 (seq (str x))))
+
+;; The entity table, rendered the way `oracle-table` renders it. Unlike the
+;; layers above, this one is DERIVED FROM THIS REPOSITORY'S OWN SPEC TABLE on
+;; both sides, so it is the first row here that carries a per-repository
+;; signal rather than a cohort-wide constant. It is also a runtime check for
+;; the defect the component generator's evidence floor exists to catch: a
+;; component whose tables still answer the TEMPLATE's prefixes passes
+;; `amu check`, and fails here.
+(defn coerce-csv [spec]
+  (str/join "," (map (fn [[k v]] (str (name k) ":" (name v))) (:coerce spec))))
+
+(defn table-line [spec]
+  (str/join "|" [(:entity spec) (:plural spec) (:id-prefix spec)
+                 (str/join "," (map name (:fields spec)))
+                 (str/join "," (map name (:required spec)))
+                 (coerce-csv spec)]))
 
 (defn row [label v] (println (str label "\t" v)))
 
@@ -46,3 +69,7 @@
 
 (println "; page-limit")
 (doseq [r [-5 0 1 20 99 100 101 250]] (row (str "page-limit " r) (m/page-limit r)))
+
+(println "; table")
+(doseq [i (range (count m/entity-specs))]
+  (row (str "table " i) (str-hash (table-line (nth m/entity-specs i)))))

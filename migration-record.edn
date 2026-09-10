@@ -69,4 +69,16 @@
    expectation set BEFORE running it: the regeneration rewrites cred-row and
    must move no harness layer, because no layer reads cred-row. A regeneration
    that had moved one would have meant something else changed too."}
+
+ :harness-relevelled-2026-09-11
+ {:added "the entity-table layer"
+  :why
+  "This harness was generated before that layer existed and compared only the
+   route count, as-int, as-bool and page-limit. Of those, page-limit CANNOT vary
+   across this cohort -- every pilot declares default-limit 20 and max-limit 100
+   -- so the harness carried one row of per-repository signal and three that
+   could not distinguish this repository from any other."
+  :measured {:entity-table "6 of 6 agreeing, against the component compiled to aarch64-macos and executed"}
+  :note
+  "The row count follows the entity table on both sides: 6 entities here."}
 }
