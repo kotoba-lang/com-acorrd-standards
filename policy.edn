@@ -1,0 +1,6 @@
+;; The two mechanisms this component reaches, as declared capability grants.
+;; Source names them `clock/now` and `entropy/draw`; the policy names their
+;; compiler wire ids (7 and 23) from amu capability-catalog.edn. ADR-q9: a clock
+;; or an entropy source crosses as a declared capability import and is not a
+;; reason to keep the component in Clojure.
+{:allow #{[:cap/call 7] [:cap/call 23]}}
