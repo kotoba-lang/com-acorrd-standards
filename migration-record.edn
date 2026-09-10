@@ -48,4 +48,25 @@
   :not-covered
   "The store, filter, pagination, handler and expand layers. The generator emits
    only what it can derive without a judgement call."}
+
+ :regenerated-2026-09-11
+ {:why
+  "This component predated three generator fixes and carried the pre-fix
+   cred-row: its ref field was emitted TWICE -- a duplicate JSON key -- next to
+   a `quantity` field this repository does not declare. Eleven of the twenty
+   pilots carried it."
+  :invisible-to
+  "Everything that was checking. `amu check` returns :ok true because the object
+   is built with jkv calls and the compiler has no schema for it, and NO layer
+   of the parity harness reads cred-row -- route count, as-int, as-bool,
+   page-limit and the entity table all derive from entity-specs or a fixed
+   string table."
+  :verified
+  "amu check :ok true, compiled to aarch64-macos, executed through
+   tools/kexe_loader.c, and every harness layer compared again afterwards."
+  :harness-unchanged
+  "Exactly one row differs, and it is the as-int \"12abc\" control. That was the
+   expectation set BEFORE running it: the regeneration rewrites cred-row and
+   must move no harness layer, because no layer reads cred-row. A regeneration
+   that had moved one would have meant something else changed too."}
 }
