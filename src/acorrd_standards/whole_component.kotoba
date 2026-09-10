@@ -1205,18 +1205,14 @@
 
 (defn seeded-store [n :i64] :string (seeded-store-from (store-empty) 0 n))
 
-;; A Claim row pointing at Account `acorrdst_acc_<i>` through BOTH of its ref
-;; fields. This is where the port stops being a rename of the aadhaar one:
-;; every spec there carried exactly one ref, so `expand`'s fold ran with a
-;; single pair, and a fold over one is not a fold. `:refs {:policyId
-;; "Account" :policyId "Account"}` makes it run twice over one row, which is the
-;; first time `refs-of`'s comma-separated list is parsed as a LIST on the
-;; production path.
+;; A Claim row pointing at the row its one ref field names.
+;; One ref means the fold runs over a single pair, and a fold over one
+;; is not a fold -- which is why no selector 4 is generated below.
 (defn cred-row [i :i64] :string
   (jobj (jsep (jsep (jkv "id" (string-concat "acorrdst_cla_" (string-from-i64 i)))
-                    (jkv "policyId" (string-concat "acorrdst_acc_" (string-from-i64 i))))
-              (jsep (jkv "policyId" (string-concat "acorrdst_acc_" (string-from-i64 i)))
-                    (jkv-raw "quantity" (string-from-i64 i))))))
+                    (jkv "policyId" (string-concat "acorrdst_pol_" (string-from-i64 i))))
+              (jsep (jkv "amount" "v") (jkv "status" "v")))))
+
 
 (defn seeded-both [n :i64] :string
   (store-put (seeded-store n) "Claim" (cred-row 1)))
@@ -1292,34 +1288,29 @@
 (defn oracle-facts [sel :i64] :i64
   (str-hash (emit-facts "Account" (seeded-row sel))))
 
-;; `refs-of` answers a REAL pair for five of the six entities, so selector 0 is
-;; the production path: a Credential row expanded through `refs-of "Claim"`
-;; against a store that holds the Account it names.
-;;
-;; The field names here are this repository's, and that is not cosmetic. The
-;; aadhaar port asked for `identityId`; carried over unchanged, every selector
-;; below would name a field Claim does not have, `expand` would fold over
-;; nothing, and all four arms would return the unexpanded record -- four green
-;; assertions measuring an empty fold. Selector 0 asks for ONE of Claim's two
-;; refs and selector 4 asks for BOTH, which is the arm no earlier pilot had.
-;; Selector 1 asks for a field that is not in `expand`, 2 points at a Account that
-;; is not in the store (the `null` arm), and 3 is an entity whose refs really
-;; are empty.
+;; Selectors 1 and 3 must collapse to the unexpanded record and 2 must
+;; differ from both; without that floor a green 0 cannot be told from a
+;; fold over nothing.
+;; There is NO selector 4: this entity declares one ref, so a `BOTH`
+;; case would duplicate selector 0 and measure nothing.
 (defn oracle-expand [sel :i64] :i64
   (let [store (seeded-both 3)
         rec (cred-row 1)]
     (cond
+      ;; the ref resolves
       (= sel 0) (str-hash (expand store rec "{\"expand\":\"policyId\"}"
                                   (refs-of "Claim")))
+      ;; a field `expand` is not asked for
       (= sel 1) (str-hash (expand store rec "{\"expand\":\"other\"}"
                                   (refs-of "Claim")))
+      ;; the ref names a row the store does not hold
       (= sel 2) (str-hash (expand store (cred-row 9) "{\"expand\":\"policyId\"}"
                                   (refs-of "Claim")))
+      ;; a spec with NO refs -- the fold runs over nothing
       (= sel 3) (str-hash (expand store rec "{\"expand\":\"policyId\"}"
                                   (refs-of "Account")))
-      (= sel 4) (str-hash (expand store rec "{\"expand\":\"policyId,policyId\"}"
-                                  (refs-of "Claim")))
       :else (str-hash rec))))
+
 
 (defn oracle-clock [seed :i64] :i64 (str-hash (now seed)))
 
