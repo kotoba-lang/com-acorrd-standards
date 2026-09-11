@@ -10,13 +10,15 @@
    input, and absent when reproducing it would mean rebuilding this
    repository's own rendering convention on the Clojure side. So the
    route count, as-int / as-bool / page-limit over the shared fixture
-   table, the entity table, and the five COUNT-valued selectors of
-   oracle-store are here.
+   table, the entity table, the five COUNT-valued selectors of
+   oracle-store, and the thirteen status- and count-valued selectors of
+   oracle-handlers are here.
 
-   Not here: the three hash-valued selectors of oracle-store, and the
-   filter, pagination, handler and expand layers, which have not been
-   read selector by selector yet. An arm that runs without asserting
-   anything about this repository is worse than an absent one.
+   Not here: the three hash-valued selectors of oracle-store, the two
+   hash-valued selectors of oracle-handlers, and the filter, pagination
+   and expand layers, which have not been read selector by selector
+   yet. An arm that runs without asserting anything about this
+   repository is worse than an absent one.
 
    ## The control
 
@@ -122,6 +124,28 @@
   (row "store 5" (let [st (seeded-store 3)] (m/persist! st e (seeded-row 1))
                     (count (m/query st e))))
   (row "store 7" (count (m/query (seeded-store 3) (:entity other-spec)))))
+
+(println "; handlers  (status codes and counts)")
+(let [e (:entity root-spec) p (:id-prefix root-spec)
+      req (map name (:required root-spec))
+      fx0 (into {} (map (fn [f] [(keyword f) "v"]) req))
+      fx1 (into {} (map (fn [f] [(keyword f) "v"]) (take 1 req)))
+      fx2 (assoc fx0 :bogus "x")
+      req1 (keyword (first req))
+      status second]
+  (row "handlers 0" (status (m/handle-create (seeded-store 2) e fx0)))
+  (row "handlers 1" (status (m/handle-create (seeded-store 2) e fx1)))
+  (row "handlers 2" (status (m/handle-create (seeded-store 2) e fx2)))
+  (row "handlers 3" (status (m/handle-list (seeded-store 2) e {})))
+  (row "handlers 4" (status (m/handle-get (seeded-store 2) e (str p "_0") {})))
+  (row "handlers 5" (status (m/handle-get (seeded-store 2) e "nope" {})))
+  (row "handlers 6" (status (m/handle-update (seeded-store 2) e (str p "_0") {req1 "updated"})))
+  (row "handlers 7" (status (m/handle-update (seeded-store 2) e "nope" {})))
+  (row "handlers 8" (status (m/handle-delete (seeded-store 2) e (str p "_0"))))
+  (row "handlers 9" (status (m/handle-delete (seeded-store 2) e "nope")))
+  (row "handlers 10" (let [st (seeded-store 2)] (m/handle-delete st e (str p "_0")) (count (m/query st e))))
+  (row "handlers 11" (let [st (seeded-store 2)] (m/handle-create st e fx0) (count (m/query st e))))
+  (row "handlers 12" (:total (first (m/handle-list (seeded-store 2) e {})))))
 
 (println "; table")
 (doseq [i (range (count m/entity-specs))]
