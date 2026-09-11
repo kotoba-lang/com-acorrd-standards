@@ -27,7 +27,7 @@
   namespaces by scanning the test directory, but a cljs runner does not, so
   a namespace omitted here would never run and nothing would say so.
 
-    nbb --classpath src:test run-tests.cljs"
+    nbb --classpath src:test run-tests.cljk"
   (:require [cljs.test :as t]
             [acorrd-standards.main-test]))
 

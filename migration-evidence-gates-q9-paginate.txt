@@ -16,5 +16,5 @@ kotoba -M compile src/acorrd_standards/paginate.kotoba --target wasm32
 clojure -M:test
 Ran 13 tests containing 70 assertions. 0 failures, 0 errors.
 
-nbb --classpath src:test run-tests.cljs
+nbb --classpath src:test run-tests.cljk
 nbb: 11 tests, 60 passed, 0 failed, 0 errors

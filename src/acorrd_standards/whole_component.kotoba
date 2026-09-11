@@ -1,5 +1,5 @@
 (ns acorrd-standards.whole-component
-  ;; The whole of `src/acorrd_standards/main.cljc` -- the generic REST actor for the six
+  ;; The whole of `src/acorrd_standards/main.cljk` -- the generic REST actor for the six
   ;; Aadhaar L4 resources -- as one Kotoba component, on the carrier the aarch64
   ;; native backend actually admits.
   ;;
@@ -1095,7 +1095,7 @@
 ;; whose answer is a document has to be driven through a window the loader can
 ;; see. `str-hash` is that window: an order-sensitive rolling hash, mod a
 ;; prime small enough that the same arithmetic is exact in a JS double, so the
-;; Clojure oracle in q9-oracle.cljs computes it the same way over
+;; Clojure oracle in q9-oracle.cljk computes it the same way over
 ;; `acorrd_standards.main`'s own answers. A wrong byte anywhere changes the number.
 ;;
 ;; The fixtures below are ASCII, so walking by byte and walking by code point
@@ -1161,7 +1161,7 @@
 
 ;; The `:float` arm, isolated. Each selector is one input on which
 ;; `acorrd_standards.main/coerce-field :float` and this component's `float` arm are
-;; compared directly in q9-oracle.cljs; a disagreement here is the measured
+;; compared directly in q9-oracle.cljk; a disagreement here is the measured
 ;; size of the as-float gap, not a rendering artifact.
 (defn oracle-float-divergence [sel :i64] :i64
   (str-hash (cond
