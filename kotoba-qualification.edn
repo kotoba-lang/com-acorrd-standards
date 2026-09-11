@@ -15,7 +15,7 @@
  :capabilities #{}
  :consumer-cutover false
  :host-boundary
- {:retained-cljc ["src/acorrd_standards/main.cljc"]
+ {:retained-cljc ["src/acorrd_standards/main.cljk"]
   :owns [:clock :uuid :mutable-crud-state :exceptions :maps :strings :floating-point]}
  :rollback
  {:oracle-retained true
