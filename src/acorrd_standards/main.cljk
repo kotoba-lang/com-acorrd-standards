@@ -12,7 +12,7 @@
   State lives on the kotoba Datom log: `emit-facts` produces namespaced EAVT
   facts (`acorrd_standards.<Entity>/<field>`); `*store*` is the in-memory materialization
   used by the contract test and by the WASM runtime before a live engine binds."
-  (:require [kotoba.lang.text :as str]))
+  (:require [kotoba.lang.coll :as kcoll] [kotoba.time :as kt] [kotoba.lang.text :as str]))
 
 (def ns-prefix "acorrd_standards")
 (def tier "L4")
@@ -52,13 +52,20 @@
                entity-specs)))
 
 ;; --- platform primitives ---
-(defn now []
-  #?(:clj (str (java.time.Instant/now))
-     :cljs (.toISOString (js/Date.))))
+(defn system-clock
+  "The host boundary: epoch-millis from the host wall clock -- the one place
+  this namespace reads time. Everything else is handed a `clock` (the
+  kotoba.time/now contract: `(clock)` returns epoch-millis)."
+  []
+  #?(:clj (System/currentTimeMillis) :cljs (.now js/Date)))
+
+(defn now
+  "UTC ISO-8601 of `(clock)`, whole seconds (kotoba.time/->iso8601)."
+  [clock]
+  (kt/->iso8601 (kt/now clock)))
 
 (defn- rand-hex16 []
-  #?(:clj (subs (str/replace (str (java.util.UUID/randomUUID)) "-" "") 0 16)
-     :cljs (subs (str/replace (str (random-uuid)) "-" "") 0 16)))
+  (subs (str/replace (str (random-uuid)) "-" "") 0 16))
 
 (defn new-id [prefix] (str prefix "_" (rand-hex16)))
 
@@ -155,7 +162,7 @@
   (let [limit (page-limit (as-int (get params :limit)))
         start (get params :starting_after)
         rows (if (some? start)
-               (let [ids (mapv :id rows) idx (.indexOf ^java.util.List ids start)]
+               (let [ids (mapv :id rows) idx (kcoll/index-of ids start)]
                  #?(:clj (if (>= idx 0) (vec (drop (inc idx) rows)) rows)
                     :cljs (let [i (.indexOf (to-array (mapv :id rows)) start)] (if (>= i 0) (vec (drop (inc i) rows)) rows))))
                rows)
@@ -174,15 +181,17 @@
 (defn- spec-for [entity] (first (filter #(= (:entity %) entity) entity-specs)))
 (defn- not-found [] [{:error {:message "Not found" :type "not_found"}} 404])
 
-(defn handle-create [store entity data]
-  (let [{:keys [fields required coerce id-prefix]} (spec-for entity)]
-    (or (some-> (reject-unknown data fields) (vector 400))
-        (some-> (require-fields data required) (vector 400))
-        (let [base {:id (new-id id-prefix)}
-              rec (reduce (fn [m f] (assoc m f (coerce-field (get coerce f) (get data f)))) base fields)
-              rec (assoc rec :createdAt (now) :updatedAt (now))]
-          (persist! store entity rec)
-          [rec 201]))))
+(defn handle-create
+  ([store entity data] (handle-create store entity data system-clock))
+  ([store entity data clock]
+   (let [{:keys [fields required coerce id-prefix]} (spec-for entity)]
+     (or (some-> (reject-unknown data fields) (vector 400))
+         (some-> (require-fields data required) (vector 400))
+         (let [base {:id (new-id id-prefix)}
+               rec (reduce (fn [m f] (assoc m f (coerce-field (get coerce f) (get data f)))) base fields)
+               rec (assoc rec :createdAt (now clock) :updatedAt (now clock))]
+           (persist! store entity rec)
+           [rec 201])))))
 
 (defn handle-list [store entity params]
   (let [{:keys [fields]} (spec-for entity)
@@ -194,16 +203,18 @@
   (let [{:keys [refs]} (spec-for entity) rows (query store entity id)]
     (if (empty? rows) (not-found) [(expand store (first rows) params refs) 200])))
 
-(defn handle-update [store entity id data]
-  (let [{:keys [fields coerce]} (spec-for entity) rows (query store entity id)]
-    (if (empty? rows)
-      (not-found)
-      (or (some-> (reject-unknown data fields) (vector 400))
-          (let [rec (reduce-kv (fn [m k v] (if (#{:id :createdAt} k) m (assoc m k (coerce-field (get coerce k) v))))
-                               (first rows) data)
-                rec (assoc rec :updatedAt (now))]
-            (persist! store entity rec)
-            [rec 200])))))
+(defn handle-update
+  ([store entity id data] (handle-update store entity id data system-clock))
+  ([store entity id data clock]
+   (let [{:keys [fields coerce]} (spec-for entity) rows (query store entity id)]
+     (if (empty? rows)
+       (not-found)
+       (or (some-> (reject-unknown data fields) (vector 400))
+           (let [rec (reduce-kv (fn [m k v] (if (#{:id :createdAt} k) m (assoc m k (coerce-field (get coerce k) v))))
+                                (first rows) data)
+                 rec (assoc rec :updatedAt (now clock))]
+             (persist! store entity rec)
+             [rec 200]))))))
 
 (defn handle-delete [store entity id]
   (if (empty? (query store entity id)) (not-found) [(retract! store entity id) 200]))
