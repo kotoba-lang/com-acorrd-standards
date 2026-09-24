@@ -3,7 +3,7 @@
   Runs under babashka: `kbb -M:test`. Stronger than the py static contract test —
   exercises CRUD / pagination / filtering / expansion / validation against the
   in-memory Datom-log store."
-  (:require [clojure.test :refer [deftest is testing run-tests]]
+  (:require [kotoba.test :refer [deftest is testing run-tests]]
             [acorrd-standards.main :as m]))
 
 (def entities ["Account" "Loan" "Policy" "Claim" "Transaction" "Customer"])
