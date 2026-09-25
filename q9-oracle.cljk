@@ -34,7 +34,7 @@
    JVM would legitimately agree on that row; say which runtime produced any
    result."
   (:require [acorrd-standards.main :as m]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 ;; Byte-identical in every hand-written harness in this cohort.
 (def fixture-text
